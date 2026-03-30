@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #1e1e1e; color: #ccc; padding: 16px;
+    display: flex; flex-direction: column; height: 100vh;
+  }
+  h2 { font-size: 14px; color: #fff; margin-bottom: 4px; }
+  .subtitle { font-size: 11px; color: #888; margin-bottom: 16px; }
+
+  .drop-zone {
+    border: 2px dashed #555; border-radius: 8px;
+    padding: 32px 16px; text-align: center;
+    cursor: pointer; transition: all 0.2s;
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 8px;
+    min-height: 120px;
+  }
+  .drop-zone:hover, .drop-zone.dragover {
+    border-color: #0ACF83; background: rgba(10, 207, 131, 0.05);
+  }
+  .drop-zone .icon { font-size: 32px; opacity: 0.5; }
+  .drop-zone .label { font-size: 12px; color: #aaa; }
+  .drop-zone .hint { font-size: 10px; color: #666; }
+
+  input[type="file"] { display: none; }
+
+  .progress { margin-top: 12px; display: none; }
+  .progress.active { display: block; }
+  .progress-bar {
+    height: 4px; background: #333; border-radius: 2px; overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%; background: #0ACF83; border-radius: 2px;
+    transition: width 0.3s ease; width: 0%;
+  }
+  .progress-text {
+    font-size: 11px; color: #888; margin-top: 6px;
+  }
+
+  .log {
+    margin-top: 12px; max-height: 140px; overflow-y: auto;
+    font-size: 10px; font-family: 'SF Mono', Monaco, monospace;
+    color: #666; line-height: 1.6;
+  }
+  .log .ok { color: #0ACF83; }
+  .log .warn { color: #f5a623; }
+  .log .err { color: #ff5c5c; }
+
+  .stats {
+    margin-top: 12px; display: none; padding: 10px;
+    background: #252525; border-radius: 6px; font-size: 11px;
+  }
+  .stats.active { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; }
+  .stats dt { color: #888; }
+  .stats dd { color: #fff; text-align: right; }
+</style>
+</head>
+<body>
+
+<h2>Pen to Figma Importer</h2>
+<p class="subtitle">Drop a .pen JSON export to create a fully editable Figma file</p>
+
+<div class="drop-zone" id="dropZone">
+  <div class="icon">&#128196;</div>
+  <div class="label">Drop .json file here or click to browse</div>
+  <div class="hint">Exported from Pencil via batch_get + get_variables</div>
+</div>
+<input type="file" id="fileInput" accept=".json,.pen">
+
+<div class="progress" id="progress">
+  <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+  <div class="progress-text" id="progressText">Preparing...</div>
+</div>
+
+<dl class="stats" id="stats"></dl>
+<div class="log" id="log"></div>
+
+<script>
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const progressEl = document.getElementById('progress');
+const progressFill = document.getElementById('progressFill');
+const progressText = document.getElementById('progressText');
+const logEl = document.getElementById('log');
+const statsEl = document.getElementById('stats');
+
+dropZone.addEventListener('click', () => fileInput.click());
+
+dropZone.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  dropZone.classList.add('dragover');
+});
+dropZone.addEventListener('dragleave', () => {
+  dropZone.classList.remove('dragover');
+});
+dropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file) handleFile(file);
+});
+fileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file) handleFile(file);
+});
+
+function handleFile(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const data = JSON.parse(e.target.result);
+      log('Parsed JSON: ' + (data.children ? data.children.length : Array.isArray(data) ? data.length : '?') + ' top-level nodes', 'ok');
+      progressEl.classList.add('active');
+      progressFill.style.width = '5%';
+      progressText.textContent = 'Sending to plugin...';
+      parent.postMessage({ pluginMessage: { type: 'import', data } }, '*');
+    } catch (err) {
+      log('Failed to parse JSON: ' + err.message, 'err');
+    }
+  };
+  reader.readAsText(file);
+}
+
+function log(msg, cls) {
+  const line = document.createElement('div');
+  line.className = cls || '';
+  line.textContent = msg;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+window.onmessage = (e) => {
+  const msg = e.data.pluginMessage;
+  if (!msg) return;
+
+  if (msg.type === 'progress') {
+    progressFill.style.width = msg.percent + '%';
+    progressText.textContent = msg.text;
+  }
+  if (msg.type === 'log') {
+    log(msg.text, msg.level);
+  }
+  if (msg.type === 'done') {
+    progressFill.style.width = '100%';
+    progressText.textContent = 'Import complete!';
+    if (msg.stats) {
+      statsEl.classList.add('active');
+      statsEl.innerHTML = Object.entries(msg.stats)
+        .map(([k, v]) => '<dt>' + k + '</dt><dd>' + v + '</dd>')
+        .join('');
+    }
+  }
+  if (msg.type === 'error') {
+    log('ERROR: ' + msg.text, 'err');
+    progressText.textContent = 'Import failed';
+    progressFill.style.background = '#ff5c5c';
+  }
+};
+</script>
+</body>
+</html>
