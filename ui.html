@@ -98,7 +98,7 @@
 <div class="log" id="log"></div>
 
 <div class="footer">
-  <span>v1.0.0 &middot; <a href="https://github.com/vasken-loganhollowell/pen-to-figma-importer" target="_blank">GitHub</a></span>
+  <span>v1.0.0 &middot; <a href="https://github.com/cloverxlimited/pen-to-figma-importer" target="_blank">GitHub</a></span>
   <button class="report-btn" id="reportBtn" onclick="reportIssue()">Report a problem</button>
 </div>
 
@@ -171,7 +171,7 @@ function reportIssue() {
     warnings.forEach(function(w) { body += '- ' + w + '\n'; });
   }
   body += '\n## Steps to reproduce\n1. \n2. \n3. \n\n## Expected vs actual\n\n';
-  var url = 'https://github.com/vasken-loganhollowell/pen-to-figma-importer/issues/new?title=Bug+report&body=' + encodeURIComponent(body);
+  var url = 'https://github.com/cloverxlimited/pen-to-figma-importer/issues/new?title=Bug+report&body=' + encodeURIComponent(body);
   window.open(url, '_blank');
 }
 

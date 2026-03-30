@@ -37,7 +37,7 @@ import, converter, design-system, components, auto-layout, variables, tokens, pe
 Design Tools
 
 ## Support Contact
-https://github.com/vasken-loganhollowell/pen-to-figma-importer/issues
+https://github.com/cloverxlimited/pen-to-figma-importer/issues
 
 ## Source Code
-https://github.com/vasken-loganhollowell/pen-to-figma-importer
+https://github.com/cloverxlimited/pen-to-figma-importer
