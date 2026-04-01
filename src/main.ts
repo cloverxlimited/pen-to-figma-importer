@@ -1241,7 +1241,7 @@ async function importDocument(data: any, pageMap?: Record<string, string>) {
 
     if (pageName === '__current__') {
       // Use the original current page (the one active when plugin started)
-      targetPage = figma.root.children.find((p: PageNode) => p.id === (figma as any)._originalPageId) || figma.root.children[0]
+      targetPage = figma.root.children.find((p: PageNode) => p.id === originalPageId) || figma.root.children[0]
     } else {
       // Find or create the page
       const existing = figma.root.children.find((p: PageNode) => p.name === pageName)
@@ -1301,7 +1301,7 @@ async function importDocument(data: any, pageMap?: Record<string, string>) {
 figma.showUI(__html__, { width: 480, height: 600, themeColors: true })
 
 // Store the original page so we can reference "Current Page" later
-;(figma as any)._originalPageId = figma.currentPage.id
+var originalPageId = figma.currentPage.id
 
 figma.ui.onmessage = async (msg: any) => {
   if (msg.type === 'scan') {

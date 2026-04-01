@@ -1179,7 +1179,7 @@
             const pageScreens = pageGroups[pageName];
             let targetPage;
             if (pageName === "__current__") {
-              targetPage = figma.root.children.find((p) => p.id === figma._originalPageId) || figma.root.children[0];
+              targetPage = figma.root.children.find((p) => p.id === originalPageId) || figma.root.children[0];
             } else {
               const existing = figma.root.children.find((p) => p.name === pageName);
               if (existing) {
@@ -1233,7 +1233,7 @@
         });
       }
       figma.showUI(__html__, { width: 480, height: 600, themeColors: true });
-      figma._originalPageId = figma.currentPage.id;
+      var originalPageId = figma.currentPage.id;
       figma.ui.onmessage = (msg) => __async(exports, null, function* () {
         if (msg.type === "scan") {
           try {
