@@ -120,6 +120,14 @@ function parseSizing(v: any): { mode: SizeMode; fallback?: number } {
   return { mode: 'FIXED' }
 }
 
+// Figma forbids resizing a vector (or any) node to 0×0; clamp to 1px minimum.
+// @param node - any Figma node that exposes a `resize(w, h)` method
+// @param w    - desired width  (values ≤ 0 are clamped to 1)
+// @param h    - desired height (values ≤ 0 are clamped to 1)
+function safeResize(node: any, w: number, h: number) {
+  node.resize(Math.max(w, 1), Math.max(h, 1))
+}
+
 // ─── Variable Collection ────────────────────────────────────
 
 async function createVariables(vars: Record<string, any>) {
@@ -424,10 +432,10 @@ function applySizing(node: SceneNode, pen: any, parentLayout: boolean) {
         else if (s.mode === 'HUG') fn.layoutSizingHorizontal = 'HUG'
         else if (s.mode === 'FIXED' && s.fallback) {
           fn.layoutSizingHorizontal = 'FIXED'
-          fn.resize(s.fallback, fn.height)
+          safeResize(fn, s.fallback, fn.height)
         }
       } else if (s.mode === 'FIXED' && s.fallback && 'resize' in node) {
-        (node as any).resize(s.fallback, (node as any).height)
+        safeResize(node, s.fallback, (node as any).height)
       }
     }
 
@@ -439,10 +447,10 @@ function applySizing(node: SceneNode, pen: any, parentLayout: boolean) {
         else if (s.mode === 'HUG') fn.layoutSizingVertical = 'HUG'
         else if (s.mode === 'FIXED' && s.fallback) {
           fn.layoutSizingVertical = 'FIXED'
-          fn.resize(fn.width, s.fallback)
+          safeResize(fn, fn.width, s.fallback)
         }
       } else if (s.mode === 'FIXED' && s.fallback && 'resize' in node) {
-        (node as any).resize((node as any).width, s.fallback)
+        safeResize(node, (node as any).width, s.fallback)
       }
     }
 
@@ -456,7 +464,7 @@ function applySizing(node: SceneNode, pen: any, parentLayout: boolean) {
           if (ws.mode === 'FILL' && parentLayout) {
             (tn as any).layoutSizingHorizontal = 'FILL'
           } else if (ws.mode === 'FIXED' && ws.fallback) {
-            tn.resize(ws.fallback, tn.height)
+            safeResize(tn, ws.fallback, tn.height)
           }
         }
       } else {
@@ -734,8 +742,56 @@ function applyPropertyOverride(node: SceneNode, key: string, val: any) {
 async function applyDescendantOverrides(node: SceneNode, overrides: any) {
   if (!overrides || typeof overrides !== 'object') return
 
-  // If override has 'type', it's a full replacement — skip for now (complex)
+  // If override has 'type', it's a full replacement
   if (overrides.type) {
+    if (overrides.type === 'ref') {
+      // Replace this descendant with a component instance (component swap)
+      const refId = overrides.ref
+      const comp = refId ? componentMap.get(refId) : null
+      if (comp) {
+        if (node.type === 'INSTANCE') {
+          // Preferred path: swap the existing instance to the new component
+          try {
+            ;(node as InstanceNode).swapComponent(comp)
+            stats.instances++
+            // Apply any remaining property overrides after the swap
+            for (const [key, val] of Object.entries(overrides)) {
+              if (key === 'type' || key === 'ref' || key === 'id') continue
+              applyPropertyOverride(node, key, val)
+            }
+            return
+          } catch (e: any) {
+            sendLog(`swapComponent failed: ${e.message}`, 'warn')
+          }
+        }
+        // Fallback: insert a new instance at the same position and remove the old node
+        const parent = node.parent
+        if (parent && 'children' in parent) {
+          try {
+            const idx = (parent as ChildrenMixin).children.indexOf(node as SceneNode)
+            if (idx === -1) {
+              sendLog(`Could not find node in parent to replace ref: ${refId}`, 'warn')
+              return
+            }
+            const inst = comp.createInstance()
+            applyCommon(inst, overrides)
+            if (overrides.x !== undefined) inst.x = overrides.x
+            if (overrides.y !== undefined) inst.y = overrides.y
+            ;(parent as ChildrenMixin).insertChild(idx, inst)
+            node.remove()
+            stats.instances++
+            return
+          } catch (e: any) {
+            sendLog(`Descendant replacement failed: ${e.message}`, 'warn')
+          }
+        }
+        sendLog(`Could not replace descendant with ref: ${refId}`, 'warn')
+      } else {
+        sendLog(`Missing component for ref: ${refId}`, 'warn')
+      }
+      return
+    }
+    // Other full-replacement types are not yet handled
     sendLog(`Full subtree replacement not yet supported (type: ${overrides.type})`, 'warn')
     return
   }
@@ -791,11 +847,11 @@ async function applyDescendantOverrides(node: SceneNode, overrides: any) {
   }
   if (overrides.width !== undefined && 'resize' in node) {
     const s = parseSizing(overrides.width)
-    if (s.mode === 'FIXED' && s.fallback) (node as any).resize(s.fallback, (node as any).height)
+    if (s.mode === 'FIXED' && s.fallback) safeResize(node, s.fallback, (node as any).height)
   }
   if (overrides.height !== undefined && 'resize' in node) {
     const s = parseSizing(overrides.height)
-    if (s.mode === 'FIXED' && s.fallback) (node as any).resize((node as any).width, s.fallback)
+    if (s.mode === 'FIXED' && s.fallback) safeResize(node, (node as any).width, s.fallback)
   }
   if (overrides.cornerRadius !== undefined && 'cornerRadius' in node) {
     if (typeof overrides.cornerRadius === 'number') (node as any).cornerRadius = overrides.cornerRadius
@@ -893,7 +949,7 @@ async function createIconFont(pen: any): Promise<FrameNode> {
   frame.fills = []
   const w = typeof pen.width === 'number' ? pen.width : 24
   const h = typeof pen.height === 'number' ? pen.height : 24
-  frame.resize(w, h)
+  safeResize(frame, w, h)
 
   // Try to use the actual icon font
   const iconFamily = pen.iconFontFamily || 'Material Symbols Outlined'
@@ -969,11 +1025,11 @@ async function buildNode(pen: any, parent: BaseNode & ChildrenMixin, parentLayou
         const h = parseSizing(pen.height)
         if (w.mode === 'FIXED' && w.fallback) {
           frame.layoutSizingHorizontal = 'FIXED'
-          frame.resize(w.fallback, frame.height)
+          safeResize(frame, w.fallback, frame.height)
         }
         if (h.mode === 'FIXED' && h.fallback) {
           frame.layoutSizingVertical = 'FIXED'
-          frame.resize(frame.width, h.fallback)
+          safeResize(frame, frame.width, h.fallback)
         }
       }
 
@@ -1030,6 +1086,12 @@ async function buildNode(pen: any, parent: BaseNode & ChildrenMixin, parentLayou
       break
     }
 
+    case 'prompt': {
+      // .pen "prompt" nodes are AI-prompt / text-input elements — import as text
+      node = await createText(pen)
+      break
+    }
+
     default: {
       sendLog(`Unknown type: ${pen.type}`, 'warn')
       return null
@@ -1048,9 +1110,9 @@ async function buildNode(pen: any, parent: BaseNode & ChildrenMixin, parentLayou
     // Explicit size for non-layout children
     const w = typeof pen.width === 'number' ? pen.width : null
     const h = typeof pen.height === 'number' ? pen.height : null
-    if (w !== null && h !== null && 'resize' in node) (node as any).resize(w, h)
-    else if (w !== null && 'resize' in node) (node as any).resize(w, (node as any).height || 100)
-    else if (h !== null && 'resize' in node) (node as any).resize((node as any).width || 100, h)
+    if (w !== null && h !== null && 'resize' in node) safeResize(node, w, h)
+    else if (w !== null && 'resize' in node) safeResize(node, w, (node as any).height || 100)
+    else if (h !== null && 'resize' in node) safeResize(node, (node as any).width || 100, h)
   }
 
   return node

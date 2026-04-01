@@ -165,6 +165,9 @@
         }
         return { mode: "FIXED" };
       }
+      function safeResize(node, w, h) {
+        node.resize(Math.max(w, 1), Math.max(h, 1));
+      }
       function createVariables(vars) {
         return __async(this, null, function* () {
           if (!vars || Object.keys(vars).length === 0)
@@ -456,10 +459,10 @@
                 fn.layoutSizingHorizontal = "HUG";
               else if (s.mode === "FIXED" && s.fallback) {
                 fn.layoutSizingHorizontal = "FIXED";
-                fn.resize(s.fallback, fn.height);
+                safeResize(fn, s.fallback, fn.height);
               }
             } else if (s.mode === "FIXED" && s.fallback && "resize" in node) {
-              node.resize(s.fallback, node.height);
+              safeResize(node, s.fallback, node.height);
             }
           }
           if (pen.height !== void 0) {
@@ -472,10 +475,10 @@
                 fn.layoutSizingVertical = "HUG";
               else if (s.mode === "FIXED" && s.fallback) {
                 fn.layoutSizingVertical = "FIXED";
-                fn.resize(fn.width, s.fallback);
+                safeResize(fn, fn.width, s.fallback);
               }
             } else if (s.mode === "FIXED" && s.fallback && "resize" in node) {
-              node.resize(node.width, s.fallback);
+              safeResize(node, node.width, s.fallback);
             }
           }
           if (node.type === "TEXT") {
@@ -487,7 +490,7 @@
                 if (ws.mode === "FILL" && parentLayout) {
                   tn.layoutSizingHorizontal = "FILL";
                 } else if (ws.mode === "FIXED" && ws.fallback) {
-                  tn.resize(ws.fallback, tn.height);
+                  safeResize(tn, ws.fallback, tn.height);
                 }
               }
             } else {
@@ -733,6 +736,53 @@
           if (!overrides || typeof overrides !== "object")
             return;
           if (overrides.type) {
+            if (overrides.type === "ref") {
+              const refId = overrides.ref;
+              const comp = refId ? componentMap.get(refId) : null;
+              if (comp) {
+                if (node.type === "INSTANCE") {
+                  try {
+                    ;
+                    node.swapComponent(comp);
+                    stats.instances++;
+                    for (const [key, val] of Object.entries(overrides)) {
+                      if (key === "type" || key === "ref" || key === "id")
+                        continue;
+                      applyPropertyOverride(node, key, val);
+                    }
+                    return;
+                  } catch (e) {
+                    sendLog(`swapComponent failed: ${e.message}`, "warn");
+                  }
+                }
+                const parent = node.parent;
+                if (parent && "children" in parent) {
+                  try {
+                    const idx = parent.children.indexOf(node);
+                    if (idx === -1) {
+                      sendLog(`Could not find node in parent to replace ref: ${refId}`, "warn");
+                      return;
+                    }
+                    const inst = comp.createInstance();
+                    applyCommon(inst, overrides);
+                    if (overrides.x !== void 0)
+                      inst.x = overrides.x;
+                    if (overrides.y !== void 0)
+                      inst.y = overrides.y;
+                    parent.insertChild(idx, inst);
+                    node.remove();
+                    stats.instances++;
+                    return;
+                  } catch (e) {
+                    sendLog(`Descendant replacement failed: ${e.message}`, "warn");
+                  }
+                }
+                sendLog(`Could not replace descendant with ref: ${refId}`, "warn");
+              } else {
+                sendLog(`Missing component for ref: ${refId}`, "warn");
+              }
+              return;
+            }
             sendLog(`Full subtree replacement not yet supported (type: ${overrides.type})`, "warn");
             return;
           }
@@ -788,12 +838,12 @@
           if (overrides.width !== void 0 && "resize" in node) {
             const s = parseSizing(overrides.width);
             if (s.mode === "FIXED" && s.fallback)
-              node.resize(s.fallback, node.height);
+              safeResize(node, s.fallback, node.height);
           }
           if (overrides.height !== void 0 && "resize" in node) {
             const s = parseSizing(overrides.height);
             if (s.mode === "FIXED" && s.fallback)
-              node.resize(node.width, s.fallback);
+              safeResize(node, node.width, s.fallback);
           }
           if (overrides.cornerRadius !== void 0 && "cornerRadius" in node) {
             if (typeof overrides.cornerRadius === "number")
@@ -888,7 +938,7 @@
           frame.fills = [];
           const w = typeof pen.width === "number" ? pen.width : 24;
           const h = typeof pen.height === "number" ? pen.height : 24;
-          frame.resize(w, h);
+          safeResize(frame, w, h);
           const iconFamily = pen.iconFontFamily || "Material Symbols Outlined";
           const iconName = pen.iconFontName || "star";
           const textNode = figma.createText();
@@ -955,11 +1005,11 @@
                 const h = parseSizing(pen.height);
                 if (w.mode === "FIXED" && w.fallback) {
                   frame.layoutSizingHorizontal = "FIXED";
-                  frame.resize(w.fallback, frame.height);
+                  safeResize(frame, w.fallback, frame.height);
                 }
                 if (h.mode === "FIXED" && h.fallback) {
                   frame.layoutSizingVertical = "FIXED";
-                  frame.resize(frame.width, h.fallback);
+                  safeResize(frame, frame.width, h.fallback);
                 }
               }
               if (isComp && pen.id)
@@ -1004,6 +1054,10 @@
               node = yield createIconFont(pen);
               break;
             }
+            case "prompt": {
+              node = yield createText(pen);
+              break;
+            }
             default: {
               sendLog(`Unknown type: ${pen.type}`, "warn");
               return null;
@@ -1021,11 +1075,11 @@
             const w = typeof pen.width === "number" ? pen.width : null;
             const h = typeof pen.height === "number" ? pen.height : null;
             if (w !== null && h !== null && "resize" in node)
-              node.resize(w, h);
+              safeResize(node, w, h);
             else if (w !== null && "resize" in node)
-              node.resize(w, node.height || 100);
+              safeResize(node, w, node.height || 100);
             else if (h !== null && "resize" in node)
-              node.resize(node.width || 100, h);
+              safeResize(node, node.width || 100, h);
           }
           return node;
         });
