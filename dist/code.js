@@ -1090,7 +1090,30 @@
           return node;
         });
       }
-      function importDocument(data) {
+      function scanDocument(data) {
+        const doc = Array.isArray(data) ? { children: data } : data;
+        const children = doc.children || [];
+        const components = children.filter((n) => n.reusable === true);
+        const screens = children.filter((n) => n.reusable !== true);
+        const screenList = screens.map((n) => ({
+          id: n.id || "",
+          name: n.name || n.id || "Untitled",
+          type: n.type || "frame"
+        }));
+        const existingPages = figma.root.children.map((p) => ({
+          id: p.id,
+          name: p.name
+        }));
+        figma.ui.postMessage({
+          type: "scan-result",
+          screens: screenList,
+          componentCount: components.length,
+          existingPages,
+          currentPageId: figma.currentPage.id,
+          currentPageName: figma.currentPage.name
+        });
+      }
+      function importDocument(data, pageMap) {
         return __async(this, null, function* () {
           componentMap.clear();
           varValues.clear();
@@ -1102,44 +1125,102 @@
             figma.ui.postMessage({ type: "error", text: "No nodes found in document" });
             return;
           }
-          sendProgress(5, "Creating variables...");
+          sendProgress(5, "Creating variable collection...");
           if (doc.variables) {
             yield createVariables(doc.variables);
           }
-          sendProgress(15, "Preloading fonts...");
+          sendProgress(15, "Loading fonts...");
           yield preloadFonts(children);
-          sendProgress(25, "Creating components...");
           const components = children.filter((n) => n.reusable === true);
-          const nonComponents = children.filter((n) => n.reusable !== true);
-          let compX = 4e3;
+          const screens = children.filter((n) => n.reusable !== true);
+          sendProgress(22, "Preparing Components page...");
+          let componentsPage;
+          const compPageName = pageMap && pageMap["__components__"] || "Components";
+          if (compPageName === figma.currentPage.name) {
+            componentsPage = figma.currentPage;
+          } else {
+            const existing = figma.root.children.find((p) => p.name === compPageName);
+            if (existing) {
+              componentsPage = existing;
+            } else {
+              componentsPage = figma.createPage();
+              componentsPage.name = compPageName;
+            }
+          }
+          sendProgress(25, "Building components...");
+          yield figma.setCurrentPageAsync(componentsPage);
           for (let i = 0; i < components.length; i++) {
             const pen = components[i];
-            const orig = __spreadProps(__spreadValues({}, pen), { x: compX, y: i * 200 });
+            const orig = __spreadProps(__spreadValues({}, pen), { x: i % 5 * 300, y: Math.floor(i / 5) * 250 });
             try {
               yield buildNode(orig, figma.currentPage, false);
             } catch (_e4) {
-              sendLog(`Component error: ${pen.name || pen.id}: ${_e4.message}`, "warn");
+              sendLog("Component error: " + (pen.name || pen.id) + ": " + _e4.message, "warn");
             }
-            sendProgress(25 + i / components.length * 25, `Component ${i + 1}/${components.length}: ${pen.name || pen.id}`);
+            sendProgress(
+              25 + i / Math.max(components.length, 1) * 20,
+              "Building " + (pen.name || pen.id) + "..."
+            );
           }
-          sendLog(`Created ${components.length} components`, "ok");
-          sendProgress(50, "Building pages...");
-          for (let i = 0; i < nonComponents.length; i++) {
-            const pen = nonComponents[i];
-            try {
-              yield buildNode(pen, figma.currentPage, false);
-            } catch (_e5) {
-              sendLog(`Page error: ${pen.name || pen.id}: ${_e5.message}`, "warn");
+          sendLog("Created " + components.length + " components", "ok");
+          const pageGroups = {};
+          for (const screen of screens) {
+            const targetPage = pageMap && pageMap[screen.id] || "__current__";
+            if (!pageGroups[targetPage])
+              pageGroups[targetPage] = [];
+            pageGroups[targetPage].push(screen);
+          }
+          const pageNames = Object.keys(pageGroups);
+          let screensDone = 0;
+          const totalScreens = screens.length;
+          const firstScreenPage = null;
+          for (let pi = 0; pi < pageNames.length; pi++) {
+            const pageName = pageNames[pi];
+            const pageScreens = pageGroups[pageName];
+            let targetPage;
+            if (pageName === "__current__") {
+              targetPage = figma.root.children.find((p) => p.id === figma._originalPageId) || figma.root.children[0];
+            } else {
+              const existing = figma.root.children.find((p) => p.name === pageName);
+              if (existing) {
+                targetPage = existing;
+              } else {
+                targetPage = figma.createPage();
+                targetPage.name = pageName;
+              }
             }
-            sendProgress(50 + i / nonComponents.length * 45, `Page ${i + 1}/${nonComponents.length}: ${pen.name || pen.id}`);
+            yield figma.setCurrentPageAsync(targetPage);
+            sendProgress(
+              45 + pi / Math.max(pageNames.length, 1) * 10,
+              "Organizing: " + targetPage.name + "..."
+            );
+            for (const pen of pageScreens) {
+              try {
+                yield buildNode(pen, figma.currentPage, false);
+              } catch (_e5) {
+                sendLog("Page error: " + (pen.name || pen.id) + ": " + _e5.message, "warn");
+              }
+              screensDone++;
+              sendProgress(
+                55 + screensDone / Math.max(totalScreens, 1) * 40,
+                "Building " + (pen.name || pen.id) + "..."
+              );
+            }
           }
-          sendLog(`Created ${nonComponents.length} page frames`, "ok");
-          sendProgress(95, "Finishing up...");
-          figma.viewport.scrollAndZoomIntoView(figma.currentPage.children);
+          sendLog("Created " + screens.length + " screens across " + pageNames.length + " page(s)", "ok");
+          sendProgress(96, "Finishing up...");
+          const landingPage = figma.root.children.find(
+            (p) => p.id !== componentsPage.id && p.children.length > 0
+          ) || figma.currentPage;
+          yield figma.setCurrentPageAsync(landingPage);
+          if (landingPage.children.length > 0) {
+            figma.viewport.scrollAndZoomIntoView(landingPage.children);
+          }
           sendProgress(100, "Done!");
           figma.ui.postMessage({
             type: "done",
             stats: {
+              "Pages": pageNames.length,
               "Components": stats.components,
               "Instances": stats.instances,
               "Frames": stats.frames,
@@ -1151,11 +1232,19 @@
           });
         });
       }
-      figma.showUI(__html__, { width: 460, height: 520, themeColors: true });
+      figma.showUI(__html__, { width: 480, height: 600, themeColors: true });
+      figma._originalPageId = figma.currentPage.id;
       figma.ui.onmessage = (msg) => __async(exports, null, function* () {
+        if (msg.type === "scan") {
+          try {
+            scanDocument(msg.data);
+          } catch (e) {
+            figma.ui.postMessage({ type: "error", text: e.message || String(e) });
+          }
+        }
         if (msg.type === "import") {
           try {
-            yield importDocument(msg.data);
+            yield importDocument(msg.data, msg.pageMap);
           } catch (e) {
             figma.ui.postMessage({ type: "error", text: e.message || String(e) });
             console.error(e);

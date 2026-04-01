@@ -1,6 +1,6 @@
 {
   "name": "pen-to-figma-importer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Figma plugin to import .pen design files as fully editable Figma documents",
   "scripts": {
     "build": "node build.mjs",

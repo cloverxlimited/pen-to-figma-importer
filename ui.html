@@ -10,7 +10,13 @@
   }
   h2 { font-size: 14px; color: #fff; margin-bottom: 4px; }
   .subtitle { font-size: 11px; color: #888; margin-bottom: 16px; }
+  input[type="file"] { display: none; }
 
+  /* ─── Steps Container ─── */
+  .step-view { display: none; flex-direction: column; flex: 1; }
+  .step-view.active { display: flex; }
+
+  /* ─── Step 1: Drop Zone ─── */
   .drop-zone {
     border: 2px dashed #555; border-radius: 8px;
     padding: 32px 16px; text-align: center;
@@ -26,21 +32,95 @@
   .drop-zone .label { font-size: 12px; color: #aaa; }
   .drop-zone .hint { font-size: 10px; color: #666; }
 
-  input[type="file"] { display: none; }
+  /* ─── Step 2: Scanning Animation ─── */
+  .scan-view {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 16px;
+    text-align: center;
+  }
+  @keyframes pulse-border {
+    0%, 100% { border-color: #0ACF83; box-shadow: 0 0 0 0 rgba(10,207,131,0); }
+    50% { border-color: #0ACF83; box-shadow: 0 0 20px 4px rgba(10,207,131,0.15); }
+  }
+  .scan-ring {
+    width: 64px; height: 64px; border-radius: 50%;
+    border: 3px solid #0ACF83;
+    animation: pulse-border 1.5s ease-in-out infinite;
+    display: flex; align-items: center; justify-content: center;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  .scan-ring-inner {
+    width: 28px; height: 28px; border-radius: 50%;
+    border: 2px solid transparent; border-top-color: #0ACF83;
+    animation: spin 0.8s linear infinite;
+  }
+  .scan-status {
+    font-size: 12px; color: #aaa; min-height: 36px;
+    transition: opacity 0.3s;
+  }
+  .scan-status .scan-main { color: #fff; font-weight: 600; margin-bottom: 2px; }
+  .scan-status .scan-detail { font-size: 10px; color: #666; }
 
-  .progress { margin-top: 12px; display: none; }
-  .progress.active { display: block; }
+  /* ─── Step 3: Page Mapper ─── */
+  .mapper-header { margin-bottom: 12px; }
+  .mapper-header h3 { font-size: 13px; color: #fff; margin-bottom: 2px; }
+  .mapper-header p { font-size: 10px; color: #666; }
+
+  .mapper-list {
+    flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
+    margin-bottom: 12px;
+  }
+  .mapper-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; background: #252525; border-radius: 6px;
+    border: 1px solid #333;
+  }
+  .mapper-row.comp-row { border-color: #0ACF83; border-style: dashed; }
+  .mapper-icon { font-size: 14px; flex-shrink: 0; width: 20px; text-align: center; }
+  .mapper-name {
+    flex: 1; font-size: 11px; color: #ccc; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .mapper-name .count { color: #666; font-size: 10px; }
+  .mapper-arrow { color: #555; font-size: 10px; flex-shrink: 0; }
+  .mapper-select {
+    width: 140px; flex-shrink: 0;
+    background: #1e1e1e; color: #ccc; border: 1px solid #444;
+    border-radius: 4px; padding: 5px 6px; font-size: 10px;
+    outline: none; cursor: pointer;
+  }
+  .mapper-select:focus { border-color: #0ACF83; }
+
+  .new-page-input {
+    width: 140px; flex-shrink: 0;
+    background: #1e1e1e; color: #0ACF83; border: 1px solid #0ACF83;
+    border-radius: 4px; padding: 5px 6px; font-size: 10px;
+    outline: none;
+  }
+  .new-page-input::placeholder { color: #555; }
+
+  .import-btn {
+    width: 100%; padding: 10px; border: none; border-radius: 6px;
+    background: #0ACF83; color: #000; font-size: 12px; font-weight: 700;
+    cursor: pointer; transition: all 0.15s; flex-shrink: 0;
+  }
+  .import-btn:hover { background: #00c47e; }
+
+  /* ─── Step 4: Import Progress ─── */
   .progress-bar {
     height: 4px; background: #333; border-radius: 2px; overflow: hidden;
+    margin-bottom: 8px;
   }
   .progress-fill {
     height: 100%; background: #0ACF83; border-radius: 2px;
     transition: width 0.3s ease; width: 0%;
   }
-  .progress-text { font-size: 11px; color: #888; margin-top: 6px; }
+  .progress-text { font-size: 11px; color: #888; margin-bottom: 8px; }
 
   .log {
-    margin-top: 12px; max-height: 100px; overflow-y: auto;
+    flex: 1; max-height: 100px; overflow-y: auto;
     font-size: 10px; font-family: 'SF Mono', Monaco, monospace;
     color: #666; line-height: 1.6;
   }
@@ -49,15 +129,24 @@
   .log .err { color: #ff5c5c; }
 
   .stats {
-    margin-top: 12px; display: none; padding: 10px;
+    display: none; padding: 10px;
     background: #252525; border-radius: 6px; font-size: 11px;
+    margin-bottom: 8px;
   }
-  .stats.active { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; }
+  .stats.active { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px 12px; }
   .stats dt { color: #888; }
   .stats dd { color: #fff; text-align: right; }
 
+  .reset-btn {
+    width: 100%; padding: 8px; border: 1px solid #444; border-radius: 6px;
+    background: none; color: #888; font-size: 11px;
+    cursor: pointer; transition: all 0.15s; margin-top: 8px;
+  }
+  .reset-btn:hover { border-color: #0ACF83; color: #0ACF83; }
+
+  /* ─── Footer ─── */
   .footer {
-    margin-top: auto; padding-top: 12px;
+    padding-top: 10px; margin-top: auto;
     display: flex; justify-content: space-between; align-items: center;
     font-size: 10px; border-top: 1px solid #333;
   }
@@ -72,7 +161,7 @@
   .report-btn:hover { border-color: #0ACF83; color: #0ACF83; }
   .report-btn.has-warnings:hover { border-color: #f5a623; color: #f5a623; }
 
-  /* ─── Modal ─── */
+  /* ─── Modal (feedback) ─── */
   .modal-overlay {
     display: none; position: fixed; inset: 0; z-index: 1000;
     background: rgba(0,0,0,.6); align-items: center; justify-content: center;
@@ -94,34 +183,26 @@
     cursor: pointer; padding: 4px; line-height: 1;
   }
   .modal-close:hover { color: #fff; }
-
   .form-group { margin-bottom: 14px; }
   .form-group label {
     display: block; font-size: 11px; color: #888;
     margin-bottom: 5px; font-weight: 600;
   }
-  .form-group select,
-  .form-group input,
-  .form-group textarea {
+  .form-group select, .form-group input, .form-group textarea {
     width: 100%; background: #1e1e1e; color: #ccc;
     border: 1px solid #444; border-radius: 6px;
     padding: 8px 10px; font-size: 12px;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     outline: none; transition: border-color 0.15s;
   }
-  .form-group select:focus,
-  .form-group input:focus,
-  .form-group textarea:focus { border-color: #0ACF83; }
+  .form-group select:focus, .form-group input:focus, .form-group textarea:focus { border-color: #0ACF83; }
   .form-group textarea { resize: vertical; min-height: 80px; }
-  .form-group .hint { font-size: 10px; color: #555; margin-top: 4px; }
-
   .form-warnings {
     background: #1e1e1e; border: 1px solid #333; border-radius: 6px;
     padding: 8px 10px; font-size: 10px; font-family: 'SF Mono', Monaco, monospace;
     color: #f5a623; max-height: 60px; overflow-y: auto; margin-bottom: 14px;
     line-height: 1.5;
   }
-
   .submit-btn {
     width: 100%; padding: 10px; border: none; border-radius: 6px;
     background: #0ACF83; color: #000; font-size: 12px; font-weight: 700;
@@ -130,18 +211,10 @@
   .submit-btn:hover { background: #00c47e; }
   .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .submit-btn.sent { background: #333; color: #0ACF83; }
-
-  .form-status {
-    text-align: center; font-size: 11px; margin-top: 10px;
-    min-height: 16px;
-  }
+  .form-status { text-align: center; font-size: 11px; margin-top: 10px; min-height: 16px; }
   .form-status.success { color: #0ACF83; }
   .form-status.error { color: #ff5c5c; }
-
-  /* ─── Tabs in modal ─── */
-  .type-tabs {
-    display: flex; gap: 6px; margin-bottom: 14px;
-  }
+  .type-tabs { display: flex; gap: 6px; margin-bottom: 14px; }
   .type-tab {
     flex: 1; padding: 8px; border: 1px solid #444; border-radius: 6px;
     background: #1e1e1e; color: #888; font-size: 11px; font-weight: 600;
@@ -156,25 +229,51 @@
 <body>
 
 <h2>Pen to Figma Importer</h2>
-<p class="subtitle">Drop a .pen JSON export to create a fully editable Figma file</p>
+<p class="subtitle">Import .pen design files as fully editable Figma documents</p>
 
-<div class="drop-zone" id="dropZone">
-  <div class="icon">&#128196;</div>
-  <div class="label">Drop .json file here or click to browse</div>
-  <div class="hint">Exported from Pencil via batch_get + get_variables</div>
+<!-- Step 1: Drop -->
+<div class="step-view active" id="stepDrop">
+  <div class="drop-zone" id="dropZone">
+    <div class="icon">&#128196;</div>
+    <div class="label">Drop .json file here or click to browse</div>
+    <div class="hint">Exported from Pencil via batch_get + get_variables</div>
+  </div>
 </div>
 <input type="file" id="fileInput" accept=".json,.pen">
 
-<div class="progress" id="progress">
-  <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-  <div class="progress-text" id="progressText">Preparing...</div>
+<!-- Step 2: Scanning -->
+<div class="step-view" id="stepScan">
+  <div class="scan-view">
+    <div class="scan-ring"><div class="scan-ring-inner"></div></div>
+    <div class="scan-status">
+      <div class="scan-main" id="scanMain">Unpacking design file...</div>
+      <div class="scan-detail" id="scanDetail">Reading node tree</div>
+    </div>
+  </div>
 </div>
 
-<dl class="stats" id="stats"></dl>
-<div class="log" id="log"></div>
+<!-- Step 3: Page Mapper -->
+<div class="step-view" id="stepMapper">
+  <div class="mapper-header">
+    <h3>Assign screens to pages</h3>
+    <p>Choose which Figma page each screen should land on</p>
+  </div>
+  <div class="mapper-list" id="mapperList"></div>
+  <button class="import-btn" id="importBtn" onclick="startImport()">Import Design</button>
+</div>
 
+<!-- Step 4: Progress -->
+<div class="step-view" id="stepProgress">
+  <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+  <div class="progress-text" id="progressText">Preparing...</div>
+  <dl class="stats" id="stats"></dl>
+  <div class="log" id="log"></div>
+  <button class="reset-btn" id="resetBtn" onclick="resetPlugin()" style="display:none">Import another file</button>
+</div>
+
+<!-- Footer -->
 <div class="footer">
-  <span>v1.0.1 &middot; <a href="https://github.com/cloverxlimited/pen-to-figma-importer" target="_blank">GitHub</a></span>
+  <span>v1.1.0 &middot; <a href="https://github.com/cloverxlimited/pen-to-figma-importer" target="_blank">GitHub</a></span>
   <button class="report-btn" id="reportBtn" onclick="openModal()">Feedback</button>
 </div>
 
@@ -185,34 +284,28 @@
       <h3>Send Feedback</h3>
       <button class="modal-close" onclick="closeModal()">&times;</button>
     </div>
-
     <div class="type-tabs">
       <div class="type-tab active" data-type="bug" onclick="setType(this)">Bug</div>
       <div class="type-tab" data-type="feature" onclick="setType(this)">Feature</div>
       <div class="type-tab" data-type="help" onclick="setType(this)">Help</div>
     </div>
-
     <form id="feedbackForm" onsubmit="submitFeedback(event)">
       <div class="form-group">
         <label>Summary</label>
         <input type="text" id="fbSummary" placeholder="Brief description of the issue or idea" required>
       </div>
-
       <div class="form-group">
         <label>Details</label>
         <textarea id="fbDetails" placeholder="Steps to reproduce, expected behavior, or feature description..."></textarea>
       </div>
-
       <div class="form-group">
         <label>Your email <span style="color:#555">(optional, for follow-up)</span></label>
         <input type="email" id="fbEmail" placeholder="you@example.com">
       </div>
-
       <div id="warningsSection" style="display:none">
-        <label style="font-size:11px; color:#888; margin-bottom:5px; display:block; font-weight:600">Plugin warnings (auto-attached)</label>
+        <label style="font-size:11px;color:#888;margin-bottom:5px;display:block;font-weight:600">Plugin warnings (auto-attached)</label>
         <div class="form-warnings" id="fbWarnings"></div>
       </div>
-
       <button type="submit" class="submit-btn" id="submitBtn">Send Feedback</button>
       <div class="form-status" id="formStatus"></div>
     </form>
@@ -221,53 +314,62 @@
 
 <script>
 // ─── CONFIG ───
-// Cloudflare Worker URL for GitHub issue creation
-// Deploy the worker from /worker directory, then paste the URL here
 var WORKER_URL = 'https://pen-to-figma-feedback.old-lab-edfe.workers.dev';
 var API_KEY = '39339ba9c671792b343beb887b495af7349d2df6f242977974903ce863855a52';
+var PLUGIN_VERSION = 'v1.1.0';
 
 // ─── State ───
 var warnings = [];
 var selectedType = 'bug';
+var pendingData = null;
+var scanResult = null;
+var pageAssignments = {}; // screenId → pageName
 
-var dropZone = document.getElementById('dropZone');
-var fileInput = document.getElementById('fileInput');
-var progressEl = document.getElementById('progress');
-var progressFill = document.getElementById('progressFill');
-var progressText = document.getElementById('progressText');
-var logEl = document.getElementById('log');
-var statsEl = document.getElementById('stats');
+// ─── Step Management ───
+function showStep(id) {
+  document.querySelectorAll('.step-view').forEach(function(el) { el.classList.remove('active'); });
+  document.getElementById(id).classList.add('active');
+}
+
+function resetPlugin() {
+  pendingData = null;
+  scanResult = null;
+  pageAssignments = {};
+  warnings = [];
+  document.getElementById('log').innerHTML = '';
+  document.getElementById('stats').className = 'stats';
+  document.getElementById('stats').innerHTML = '';
+  document.getElementById('progressFill').style.width = '0%';
+  document.getElementById('progressFill').style.background = '#0ACF83';
+  document.getElementById('resetBtn').style.display = 'none';
+  document.getElementById('reportBtn').textContent = 'Feedback';
+  document.getElementById('reportBtn').classList.remove('has-warnings');
+  showStep('stepDrop');
+}
 
 // ─── Drop Zone ───
+var dropZone = document.getElementById('dropZone');
+var fileInput = document.getElementById('fileInput');
+
 dropZone.addEventListener('click', function() { fileInput.click(); });
 dropZone.addEventListener('dragover', function(e) {
-  e.preventDefault();
-  dropZone.classList.add('dragover');
+  e.preventDefault(); dropZone.classList.add('dragover');
 });
-dropZone.addEventListener('dragleave', function() {
-  dropZone.classList.remove('dragover');
-});
+dropZone.addEventListener('dragleave', function() { dropZone.classList.remove('dragover'); });
 dropZone.addEventListener('drop', function(e) {
-  e.preventDefault();
-  dropZone.classList.remove('dragover');
-  var file = e.dataTransfer.files[0];
-  if (file) handleFile(file);
+  e.preventDefault(); dropZone.classList.remove('dragover');
+  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
 });
 fileInput.addEventListener('change', function(e) {
-  var file = e.target.files[0];
-  if (file) handleFile(file);
+  if (e.target.files[0]) handleFile(e.target.files[0]);
 });
 
 function handleFile(file) {
   var reader = new FileReader();
   reader.onload = function(e) {
     try {
-      var data = JSON.parse(e.target.result);
-      log('Parsed JSON: ' + (data.children ? data.children.length : Array.isArray(data) ? data.length : '?') + ' top-level nodes', 'ok');
-      progressEl.classList.add('active');
-      progressFill.style.width = '5%';
-      progressText.textContent = 'Sending to plugin...';
-      parent.postMessage({ pluginMessage: { type: 'import', data: data } }, '*');
+      pendingData = JSON.parse(e.target.result);
+      startScan();
     } catch (err) {
       log('Failed to parse JSON: ' + err.message, 'err');
     }
@@ -275,10 +377,154 @@ function handleFile(file) {
   reader.readAsText(file);
 }
 
+// ─── Scanning Animation ───
+var scanMessages = [
+  ['Unpacking design file...', 'Reading JSON structure'],
+  ['Scanning node tree...', 'Identifying frames and components'],
+  ['Analyzing design tokens...', 'Mapping variables and styles'],
+  ['Detecting screens...', 'Preparing page mapper'],
+];
+var scanIndex = 0;
+var scanTimer = null;
+
+function startScan() {
+  showStep('stepScan');
+  scanIndex = 0;
+  updateScanMessage();
+  scanTimer = setInterval(function() {
+    scanIndex++;
+    if (scanIndex < scanMessages.length) {
+      updateScanMessage();
+    }
+  }, 800);
+
+  // Send to plugin for actual scanning
+  parent.postMessage({ pluginMessage: { type: 'scan', data: pendingData } }, '*');
+}
+
+function updateScanMessage() {
+  var msg = scanMessages[Math.min(scanIndex, scanMessages.length - 1)];
+  document.getElementById('scanMain').textContent = msg[0];
+  document.getElementById('scanDetail').textContent = msg[1];
+}
+
+// ─── Page Mapper ───
+function buildMapper(result) {
+  if (scanTimer) { clearInterval(scanTimer); scanTimer = null; }
+  scanResult = result;
+
+  var list = document.getElementById('mapperList');
+  list.innerHTML = '';
+
+  // Build page options
+  var pageOptions = '<option value="__current__">Current Page</option>';
+  result.existingPages.forEach(function(p) {
+    if (p.id !== result.currentPageId) {
+      pageOptions += '<option value="' + escHtml(p.name) + '">' + escHtml(p.name) + '</option>';
+    }
+  });
+  pageOptions += '<option value="__new__">+ New Page</option>';
+
+  // Component row
+  if (result.componentCount > 0) {
+    var compRow = document.createElement('div');
+    compRow.className = 'mapper-row comp-row';
+    compRow.innerHTML =
+      '<span class="mapper-icon">&#9881;</span>' +
+      '<span class="mapper-name">Components <span class="count">(' + result.componentCount + ')</span></span>' +
+      '<span class="mapper-arrow">&rarr;</span>' +
+      '<select class="mapper-select" id="compPageSelect" onchange="handlePageSelect(this, \'__components__\')">' +
+      pageOptions.replace('Current Page', 'Current Page') +
+      '</select>';
+    list.appendChild(compRow);
+
+    // Default components to "Components" page via "New Page"
+    var compSelect = compRow.querySelector('select');
+    compSelect.value = '__new__';
+    handlePageSelect(compSelect, '__components__');
+    // Replace the select with the input pre-filled
+    var existingInput = compRow.querySelector('.new-page-input');
+    if (existingInput) existingInput.value = 'Components';
+    pageAssignments['__components__'] = 'Components';
+  }
+
+  // Screen rows
+  result.screens.forEach(function(screen) {
+    var row = document.createElement('div');
+    row.className = 'mapper-row';
+    row.innerHTML =
+      '<span class="mapper-icon">&#9634;</span>' +
+      '<span class="mapper-name">' + escHtml(screen.name) + '</span>' +
+      '<span class="mapper-arrow">&rarr;</span>' +
+      '<select class="mapper-select" data-screen-id="' + escHtml(screen.id) + '" onchange="handlePageSelect(this, \'' + escHtml(screen.id) + '\')">' +
+      pageOptions +
+      '</select>';
+    list.appendChild(row);
+    pageAssignments[screen.id] = '__current__';
+  });
+
+  // Update scan detail with final count
+  document.getElementById('scanMain').textContent = 'Found ' + result.screens.length + ' screens, ' + result.componentCount + ' components';
+  document.getElementById('scanDetail').textContent = 'Ready to map';
+
+  // Brief pause then show mapper
+  setTimeout(function() { showStep('stepMapper'); }, 400);
+}
+
+function handlePageSelect(select, screenId) {
+  if (select.value === '__new__') {
+    // Replace select with text input
+    var input = document.createElement('input');
+    input.className = 'new-page-input';
+    input.type = 'text';
+    input.placeholder = 'Page name...';
+    input.setAttribute('data-screen-id', screenId);
+    input.addEventListener('input', function() {
+      pageAssignments[screenId] = this.value || '__current__';
+    });
+    input.addEventListener('blur', function() {
+      if (!this.value.trim()) {
+        // Revert to select
+        var parent = this.parentElement;
+        parent.replaceChild(select, this);
+        select.value = '__current__';
+        pageAssignments[screenId] = '__current__';
+      }
+    });
+    select.parentElement.replaceChild(input, select);
+    input.focus();
+    pageAssignments[screenId] = '';
+  } else {
+    pageAssignments[screenId] = select.value;
+  }
+}
+
+function escHtml(s) {
+  var div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+// ─── Import ───
+function startImport() {
+  showStep('stepProgress');
+  document.getElementById('progressFill').style.width = '2%';
+  document.getElementById('progressText').textContent = 'Starting import...';
+  parent.postMessage({
+    pluginMessage: {
+      type: 'import',
+      data: pendingData,
+      pageMap: pageAssignments
+    }
+  }, '*');
+}
+
+// ─── Logging ───
 function log(msg, cls) {
   var line = document.createElement('div');
   line.className = cls || '';
   line.textContent = msg;
+  var logEl = document.getElementById('log');
   logEl.appendChild(line);
   logEl.scrollTop = logEl.scrollHeight;
   if (cls === 'warn' || cls === 'err') {
@@ -296,26 +542,13 @@ function openModal() {
   document.getElementById('submitBtn').disabled = false;
   document.getElementById('submitBtn').className = 'submit-btn';
   document.getElementById('submitBtn').textContent = 'Send Feedback';
-
-  // Show warnings if any
   var ws = document.getElementById('warningsSection');
   var wc = document.getElementById('fbWarnings');
-  if (warnings.length > 0) {
-    ws.style.display = 'block';
-    wc.textContent = warnings.join('\n');
-  } else {
-    ws.style.display = 'none';
-  }
+  if (warnings.length > 0) { ws.style.display = 'block'; wc.textContent = warnings.join('\n'); }
+  else { ws.style.display = 'none'; }
 }
-
-function closeModal() {
-  document.getElementById('modalOverlay').classList.remove('open');
-}
-
-// Close on overlay click
-document.getElementById('modalOverlay').addEventListener('click', function(e) {
-  if (e.target === this) closeModal();
-});
+function closeModal() { document.getElementById('modalOverlay').classList.remove('open'); }
+document.getElementById('modalOverlay').addEventListener('click', function(e) { if (e.target === this) closeModal(); });
 
 function setType(el) {
   document.querySelectorAll('.type-tab').forEach(function(t) { t.classList.remove('active'); });
@@ -325,7 +558,6 @@ function setType(el) {
 
 function submitFeedback(e) {
   e.preventDefault();
-
   var summary = document.getElementById('fbSummary').value.trim();
   var details = document.getElementById('fbDetails').value.trim();
   var email = document.getElementById('fbEmail').value.trim();
@@ -336,64 +568,45 @@ function submitFeedback(e) {
 
   var payload = {
     _subject: '[Pen-to-Figma ' + selectedType.toUpperCase() + '] ' + summary,
-    type: selectedType,
-    summary: summary,
-    details: details || '(none)',
-    email: email || '(not provided)',
-    plugin_version: 'v1.0.1',
+    type: selectedType, summary: summary,
+    details: details || '(none)', email: email || '(not provided)',
+    plugin_version: PLUGIN_VERSION,
     warnings: warnings.length > 0 ? warnings.join('\n') : '(none)'
   };
 
-  // Check if worker is configured
   if (WORKER_URL === '__YOUR_WORKER_URL__') {
-    // Fallback: copy to clipboard
-    var text = '--- ' + selectedType.toUpperCase() + ' REPORT ---\n';
-    text += 'Summary: ' + summary + '\n';
-    text += 'Details: ' + (details || 'N/A') + '\n';
-    text += 'Email: ' + (email || 'N/A') + '\n';
-    text += 'Plugin: v1.0.1\n';
-    if (warnings.length > 0) text += 'Warnings:\n' + warnings.join('\n') + '\n';
-
     if (navigator.clipboard) {
+      var text = '--- ' + selectedType.toUpperCase() + ' ---\nSummary: ' + summary + '\nDetails: ' + (details || 'N/A') + '\n';
       navigator.clipboard.writeText(text).then(function() {
-        status.textContent = 'Copied to clipboard! Worker not configured yet.';
-        status.className = 'form-status success';
-        btn.textContent = 'Copied!';
-        btn.className = 'submit-btn sent';
+        status.textContent = 'Copied to clipboard!'; status.className = 'form-status success';
+        btn.textContent = 'Copied!'; btn.className = 'submit-btn sent';
       });
     }
     return;
   }
 
-  // Submit to Cloudflare Worker → GitHub Issues
-  btn.disabled = true;
-  btn.textContent = 'Sending...';
-  status.textContent = '';
-  status.className = 'form-status';
+  btn.disabled = true; btn.textContent = 'Sending...';
+  status.textContent = ''; status.className = 'form-status';
 
   fetch(WORKER_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
     body: JSON.stringify(payload)
   })
-  .then(function(res) { return res.json().then(function(data) { return { ok: res.ok, data: data }; }); })
-  .then(function(result) {
-    if (result.ok && result.data.success) {
-      status.textContent = 'Issue #' + result.data.issue_number + ' created! Thanks for your feedback.';
+  .then(function(res) { return res.json().then(function(d) { return { ok: res.ok, data: d }; }); })
+  .then(function(r) {
+    if (r.ok && r.data.success) {
+      status.textContent = 'Issue #' + r.data.issue_number + ' created! Thanks.';
       status.className = 'form-status success';
-      btn.textContent = 'Sent!';
-      btn.className = 'submit-btn sent';
+      btn.textContent = 'Sent!'; btn.className = 'submit-btn sent';
       document.getElementById('fbSummary').value = '';
       document.getElementById('fbDetails').value = '';
-    } else {
-      throw new Error(result.data.error || 'Unknown error');
-    }
+    } else { throw new Error(r.data.error || 'Unknown error'); }
   })
   .catch(function(err) {
     status.textContent = 'Failed: ' + err.message;
     status.className = 'form-status error';
-    btn.disabled = false;
-    btn.textContent = 'Try Again';
+    btn.disabled = false; btn.textContent = 'Try Again';
   });
 }
 
@@ -402,27 +615,33 @@ window.onmessage = function(e) {
   var msg = e.data.pluginMessage;
   if (!msg) return;
 
+  if (msg.type === 'scan-result') {
+    buildMapper(msg);
+  }
   if (msg.type === 'progress') {
-    progressFill.style.width = msg.percent + '%';
-    progressText.textContent = msg.text;
+    document.getElementById('progressFill').style.width = msg.percent + '%';
+    document.getElementById('progressText').textContent = msg.text;
   }
   if (msg.type === 'log') {
     log(msg.text, msg.level);
   }
   if (msg.type === 'done') {
-    progressFill.style.width = '100%';
-    progressText.textContent = 'Import complete!';
+    document.getElementById('progressFill').style.width = '100%';
+    document.getElementById('progressText').textContent = 'Import complete!';
     if (msg.stats) {
+      var statsEl = document.getElementById('stats');
       statsEl.classList.add('active');
       statsEl.innerHTML = Object.entries(msg.stats)
         .map(function(entry) { return '<dt>' + entry[0] + '</dt><dd>' + entry[1] + '</dd>'; })
         .join('');
     }
+    document.getElementById('resetBtn').style.display = 'block';
   }
   if (msg.type === 'error') {
     log('ERROR: ' + msg.text, 'err');
-    progressText.textContent = 'Import failed';
-    progressFill.style.background = '#ff5c5c';
+    document.getElementById('progressText').textContent = 'Import failed';
+    document.getElementById('progressFill').style.background = '#ff5c5c';
+    document.getElementById('resetBtn').style.display = 'block';
   }
 };
 </script>

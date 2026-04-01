@@ -1121,16 +1121,46 @@ async function buildNode(pen: any, parent: BaseNode & ChildrenMixin, parentLayou
   return node
 }
 
+// ─── Scan: Extract screens + existing pages for the mapper ──
+
+function scanDocument(data: any) {
+  const doc = Array.isArray(data) ? { children: data } : data
+  const children: any[] = doc.children || []
+
+  const components = children.filter((n: any) => n.reusable === true)
+  const screens = children.filter((n: any) => n.reusable !== true)
+
+  const screenList = screens.map((n: any) => ({
+    id: n.id || '',
+    name: n.name || n.id || 'Untitled',
+    type: n.type || 'frame',
+  }))
+
+  const existingPages = figma.root.children.map((p: PageNode) => ({
+    id: p.id,
+    name: p.name,
+  }))
+
+  figma.ui.postMessage({
+    type: 'scan-result',
+    screens: screenList,
+    componentCount: components.length,
+    existingPages: existingPages,
+    currentPageId: figma.currentPage.id,
+    currentPageName: figma.currentPage.name,
+  })
+}
+
 // ─── Import Orchestration ───────────────────────────────────
 
-async function importDocument(data: any) {
+async function importDocument(data: any, pageMap?: Record<string, string>) {
   // Reset state
   componentMap.clear()
   varValues.clear()
   figmaVars.clear()
   stats = { frames: 0, texts: 0, rects: 0, components: 0, instances: 0, variables: 0, vectors: 0 }
 
-  // Normalize input: support both { children: [...] } and bare array
+  // Normalize input
   const doc = Array.isArray(data) ? { children: data } : data
   const children: any[] = doc.children || []
 
@@ -1139,61 +1169,122 @@ async function importDocument(data: any) {
     return
   }
 
-  sendProgress(5, 'Creating variables...')
+  sendProgress(5, 'Creating variable collection...')
 
   // 1. Variables
   if (doc.variables) {
     await createVariables(doc.variables)
   }
 
-  sendProgress(15, 'Preloading fonts...')
+  sendProgress(15, 'Loading fonts...')
 
   // 2. Preload fonts
   await preloadFonts(children)
 
-  sendProgress(25, 'Creating components...')
-
-  // 3. First pass: create components (reusable nodes)
+  // 3. Separate components and screens
   const components = children.filter((n: any) => n.reusable === true)
-  const nonComponents = children.filter((n: any) => n.reusable !== true)
+  const screens = children.filter((n: any) => n.reusable !== true)
 
-  // Create a "Components" page section
-  let compX = 4000 // Place components off to the side
+  // 4. Create or find the Components page
+  sendProgress(22, 'Preparing Components page...')
+  let componentsPage: PageNode
+  const compPageName = (pageMap && pageMap['__components__']) || 'Components'
+
+  if (compPageName === figma.currentPage.name) {
+    componentsPage = figma.currentPage
+  } else {
+    // Check if page exists
+    const existing = figma.root.children.find((p: PageNode) => p.name === compPageName)
+    if (existing) {
+      componentsPage = existing
+    } else {
+      componentsPage = figma.createPage()
+      componentsPage.name = compPageName
+    }
+  }
+
+  // 5. Build components on the Components page
+  sendProgress(25, 'Building components...')
+  await figma.setCurrentPageAsync(componentsPage)
+
   for (let i = 0; i < components.length; i++) {
     const pen = components[i]
-    // Override position to place components neatly
-    const orig = { ...pen, x: compX, y: i * 200 }
+    const orig = { ...pen, x: (i % 5) * 300, y: Math.floor(i / 5) * 250 }
     try {
       await buildNode(orig, figma.currentPage, false)
     } catch (_e4) {
-      sendLog(`Component error: ${pen.name || pen.id}: ${(_e4 as any).message}`, 'warn')
+      sendLog('Component error: ' + (pen.name || pen.id) + ': ' + (_e4 as any).message, 'warn')
     }
-    sendProgress(25 + (i / components.length) * 25, `Component ${i + 1}/${components.length}: ${pen.name || pen.id}`)
+    sendProgress(25 + (i / Math.max(components.length, 1)) * 20,
+      'Building ' + (pen.name || pen.id) + '...')
   }
-  sendLog(`Created ${components.length} components`, 'ok')
+  sendLog('Created ' + components.length + ' components', 'ok')
 
-  sendProgress(50, 'Building pages...')
+  // 6. Group screens by target page
+  const pageGroups: Record<string, any[]> = {}
+  for (const screen of screens) {
+    const targetPage = (pageMap && pageMap[screen.id]) || '__current__'
+    if (!pageGroups[targetPage]) pageGroups[targetPage] = []
+    pageGroups[targetPage].push(screen)
+  }
 
-  // 4. Second pass: create page frames (non-reusable top-level nodes)
-  for (let i = 0; i < nonComponents.length; i++) {
-    const pen = nonComponents[i]
-    try {
-      await buildNode(pen, figma.currentPage, false)
-    } catch (_e5) {
-      sendLog(`Page error: ${pen.name || pen.id}: ${(_e5 as any).message}`, 'warn')
+  // 7. Build screens on their assigned pages
+  const pageNames = Object.keys(pageGroups)
+  let screensDone = 0
+  const totalScreens = screens.length
+  const firstScreenPage: PageNode | null = null
+
+  for (let pi = 0; pi < pageNames.length; pi++) {
+    const pageName = pageNames[pi]
+    const pageScreens = pageGroups[pageName]
+    let targetPage: PageNode
+
+    if (pageName === '__current__') {
+      // Use the original current page (the one active when plugin started)
+      targetPage = figma.root.children.find((p: PageNode) => p.id === (figma as any)._originalPageId) || figma.root.children[0]
+    } else {
+      // Find or create the page
+      const existing = figma.root.children.find((p: PageNode) => p.name === pageName)
+      if (existing) {
+        targetPage = existing
+      } else {
+        targetPage = figma.createPage()
+        targetPage.name = pageName
+      }
     }
-    sendProgress(50 + (i / nonComponents.length) * 45, `Page ${i + 1}/${nonComponents.length}: ${pen.name || pen.id}`)
-  }
-  sendLog(`Created ${nonComponents.length} page frames`, 'ok')
 
-  // 5. Zoom to fit
-  sendProgress(95, 'Finishing up...')
-  figma.viewport.scrollAndZoomIntoView(figma.currentPage.children)
+    await figma.setCurrentPageAsync(targetPage)
+    sendProgress(45 + (pi / Math.max(pageNames.length, 1)) * 10,
+      'Organizing: ' + targetPage.name + '...')
+
+    for (const pen of pageScreens) {
+      try {
+        await buildNode(pen, figma.currentPage, false)
+      } catch (_e5) {
+        sendLog('Page error: ' + (pen.name || pen.id) + ': ' + (_e5 as any).message, 'warn')
+      }
+      screensDone++
+      sendProgress(55 + (screensDone / Math.max(totalScreens, 1)) * 40,
+        'Building ' + (pen.name || pen.id) + '...')
+    }
+  }
+  sendLog('Created ' + screens.length + ' screens across ' + pageNames.length + ' page(s)', 'ok')
+
+  // 8. Zoom to fit on the first screen page
+  sendProgress(96, 'Finishing up...')
+  const landingPage = figma.root.children.find((p: PageNode) =>
+    p.id !== componentsPage.id && p.children.length > 0
+  ) || figma.currentPage
+  await figma.setCurrentPageAsync(landingPage)
+  if (landingPage.children.length > 0) {
+    figma.viewport.scrollAndZoomIntoView(landingPage.children)
+  }
 
   sendProgress(100, 'Done!')
   figma.ui.postMessage({
     type: 'done',
     stats: {
+      'Pages': pageNames.length,
       'Components': stats.components,
       'Instances': stats.instances,
       'Frames': stats.frames,
@@ -1207,12 +1298,23 @@ async function importDocument(data: any) {
 
 // ─── Plugin Entry Point ─────────────────────────────────────
 
-figma.showUI(__html__, { width: 460, height: 520, themeColors: true })
+figma.showUI(__html__, { width: 480, height: 600, themeColors: true })
+
+// Store the original page so we can reference "Current Page" later
+;(figma as any)._originalPageId = figma.currentPage.id
 
 figma.ui.onmessage = async (msg: any) => {
+  if (msg.type === 'scan') {
+    try {
+      scanDocument(msg.data)
+    } catch (e: any) {
+      figma.ui.postMessage({ type: 'error', text: e.message || String(e) })
+    }
+  }
+
   if (msg.type === 'import') {
     try {
-      await importDocument(msg.data)
+      await importDocument(msg.data, msg.pageMap)
     } catch (e: any) {
       figma.ui.postMessage({ type: 'error', text: e.message || String(e) })
       console.error(e)
