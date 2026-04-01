@@ -1,0 +1,130 @@
+/**
+ * Cloudflare Worker: Pen-to-Figma Feedback → GitHub Issues
+ *
+ * Receives POST requests from the Figma plugin and creates
+ * labeled GitHub issues. No GitHub account needed for the reporter.
+ *
+ * Secrets required (set via `npx wrangler secret put GITHUB_TOKEN`):
+ *   GITHUB_TOKEN - Fine-grained PAT with Issues: Read & Write on the target repo
+ */
+
+var LABEL_MAP = {
+  bug: ['bug'],
+  feature: ['enhancement'],
+  help: ['question'],
+};
+
+async function handleRequest(request, env) {
+  // CORS preflight
+  if (request.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 204,
+      headers: corsHeaders(),
+    });
+  }
+
+  if (request.method !== 'POST') {
+    return jsonResponse({ error: 'Method not allowed' }, 405);
+  }
+
+  // Parse body
+  var body;
+  try {
+    body = await request.json();
+  } catch (e) {
+    return jsonResponse({ error: 'Invalid JSON' }, 400);
+  }
+
+  var type = body.type || 'bug';
+  var summary = (body.summary || '').trim();
+  var details = (body.details || '').trim();
+  var email = (body.email || '').trim();
+  var pluginVersion = body.plugin_version || 'unknown';
+  var warnings = (body.warnings || '').trim();
+
+  if (!summary) {
+    return jsonResponse({ error: 'Summary is required' }, 400);
+  }
+
+  // Build issue body
+  var issueBody = '## ' + capitalize(type) + ' Report\n\n';
+  issueBody += '**Summary:** ' + summary + '\n\n';
+
+  if (details && details !== '(none)') {
+    issueBody += '### Details\n' + details + '\n\n';
+  }
+
+  if (warnings && warnings !== '(none)') {
+    issueBody += '### Plugin Warnings\n```\n' + warnings + '\n```\n\n';
+  }
+
+  issueBody += '---\n';
+  issueBody += '**Plugin version:** ' + pluginVersion + '\n';
+  if (email && email !== '(not provided)') {
+    issueBody += '**Contact:** ' + email + '\n';
+  }
+  issueBody += '\n_Submitted via Figma plugin feedback form_';
+
+  // Create GitHub issue
+  var issueTitle = '[' + capitalize(type) + '] ' + summary;
+  var labels = LABEL_MAP[type] || ['bug'];
+
+  var ghUrl = 'https://api.github.com/repos/' + env.GITHUB_OWNER + '/' + env.GITHUB_REPO + '/issues';
+
+  var ghResponse;
+  try {
+    ghResponse = await fetch(ghUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + env.GITHUB_TOKEN,
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': 'pen-to-figma-feedback-worker',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        title: issueTitle,
+        body: issueBody,
+        labels: labels,
+      }),
+    });
+  } catch (e) {
+    return jsonResponse({ error: 'Failed to reach GitHub: ' + e.message }, 502);
+  }
+
+  if (!ghResponse.ok) {
+    var errText = await ghResponse.text();
+    return jsonResponse({ error: 'GitHub API error: ' + ghResponse.status, details: errText }, 502);
+  }
+
+  var issue = await ghResponse.json();
+
+  return jsonResponse({
+    success: true,
+    issue_number: issue.number,
+    issue_url: issue.html_url,
+  }, 201);
+}
+
+function capitalize(s) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function corsHeaders() {
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Max-Age': '86400',
+  };
+}
+
+function jsonResponse(data, status) {
+  return new Response(JSON.stringify(data), {
+    status: status || 200,
+    headers: Object.assign({ 'Content-Type': 'application/json' }, corsHeaders()),
+  });
+}
+
+export default {
+  fetch: handleRequest,
+};

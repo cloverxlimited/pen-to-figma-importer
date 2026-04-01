@@ -221,9 +221,9 @@
 
 <script>
 // ─── CONFIG ───
-// Replace with your Formspree form ID from https://formspree.io
-var FORMSPREE_ID = '__YOUR_FORMSPREE_ID__';
-var FORMSPREE_URL = 'https://formspree.io/f/' + FORMSPREE_ID;
+// Cloudflare Worker URL for GitHub issue creation
+// Deploy the worker from /worker directory, then paste the URL here
+var WORKER_URL = '__YOUR_WORKER_URL__';
 
 // ─── State ───
 var warnings = [];
@@ -343,9 +343,9 @@ function submitFeedback(e) {
     warnings: warnings.length > 0 ? warnings.join('\n') : '(none)'
   };
 
-  // Check if Formspree is configured
-  if (FORMSPREE_ID === '__YOUR_FORMSPREE_ID__') {
-    // Fallback: copy to clipboard and show message
+  // Check if worker is configured
+  if (WORKER_URL === '__YOUR_WORKER_URL__') {
+    // Fallback: copy to clipboard
     var text = '--- ' + selectedType.toUpperCase() + ' REPORT ---\n';
     text += 'Summary: ' + summary + '\n';
     text += 'Details: ' + (details || 'N/A') + '\n';
@@ -353,49 +353,43 @@ function submitFeedback(e) {
     text += 'Plugin: v1.0.1\n';
     if (warnings.length > 0) text += 'Warnings:\n' + warnings.join('\n') + '\n';
 
-    // Try clipboard
     if (navigator.clipboard) {
       navigator.clipboard.writeText(text).then(function() {
-        status.textContent = 'Copied to clipboard! Email it to hello@vaskendesign.com';
+        status.textContent = 'Copied to clipboard! Worker not configured yet.';
         status.className = 'form-status success';
         btn.textContent = 'Copied!';
         btn.className = 'submit-btn sent';
       });
-    } else {
-      // Open mailto as last resort
-      var mailto = 'mailto:hello@vaskendesign.com?subject=' + encodeURIComponent(payload._subject) + '&body=' + encodeURIComponent(text);
-      window.open(mailto);
-      status.textContent = 'Opening email client...';
-      status.className = 'form-status success';
     }
     return;
   }
 
-  // Submit to Formspree
+  // Submit to Cloudflare Worker → GitHub Issues
   btn.disabled = true;
   btn.textContent = 'Sending...';
   status.textContent = '';
   status.className = 'form-status';
 
-  fetch(FORMSPREE_URL, {
+  fetch(WORKER_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   })
-  .then(function(res) {
-    if (res.ok) {
-      status.textContent = 'Sent! Thanks for your feedback.';
+  .then(function(res) { return res.json().then(function(data) { return { ok: res.ok, data: data }; }); })
+  .then(function(result) {
+    if (result.ok && result.data.success) {
+      status.textContent = 'Issue #' + result.data.issue_number + ' created! Thanks for your feedback.';
       status.className = 'form-status success';
       btn.textContent = 'Sent!';
       btn.className = 'submit-btn sent';
       document.getElementById('fbSummary').value = '';
       document.getElementById('fbDetails').value = '';
     } else {
-      throw new Error('Server returned ' + res.status);
+      throw new Error(result.data.error || 'Unknown error');
     }
   })
   .catch(function(err) {
-    status.textContent = 'Failed to send: ' + err.message;
+    status.textContent = 'Failed: ' + err.message;
     status.className = 'form-status error';
     btn.disabled = false;
     btn.textContent = 'Try Again';

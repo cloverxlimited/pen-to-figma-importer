@@ -1,0 +1,7 @@
+name = "pen-to-figma-feedback"
+main = "index.js"
+compatibility_date = "2024-01-01"
+
+[vars]
+GITHUB_OWNER = "cloverxlimited"
+GITHUB_REPO = "pen-to-figma-importer"
