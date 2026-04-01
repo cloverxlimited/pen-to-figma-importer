@@ -4,9 +4,13 @@
  * Receives POST requests from the Figma plugin and creates
  * labeled GitHub issues. No GitHub account needed for the reporter.
  *
- * Secrets required (set via `npx wrangler secret put GITHUB_TOKEN`):
+ * Secrets required (set via `npx wrangler secret put <NAME>`):
  *   GITHUB_TOKEN - Fine-grained PAT with Issues: Read & Write on the target repo
+ *   API_KEY      - Shared secret the plugin sends to authenticate requests
  */
+
+// Simple in-memory rate limiter (resets on worker restart, which is fine)
+var rateLimitMap = new Map();
 
 var LABEL_MAP = {
   bug: ['bug'],
@@ -25,6 +29,33 @@ async function handleRequest(request, env) {
 
   if (request.method !== 'POST') {
     return jsonResponse({ error: 'Method not allowed' }, 405);
+  }
+
+  // Verify API key
+  var authHeader = request.headers.get('X-API-Key') || '';
+  if (!env.API_KEY || authHeader !== env.API_KEY) {
+    return jsonResponse({ error: 'Unauthorized' }, 401);
+  }
+
+  // Rate limit: max 10 issues per IP per hour (simple in-memory check)
+  var clientIP = request.headers.get('CF-Connecting-IP') || 'unknown';
+  var now = Date.now();
+  var rateKey = 'rate:' + clientIP;
+  var rateData = rateLimitMap.get(rateKey);
+  if (rateData) {
+    // Clean old entries
+    rateData.timestamps = rateData.timestamps.filter(function(t) { return now - t < 3600000; });
+    if (rateData.timestamps.length >= 10) {
+      return jsonResponse({ error: 'Rate limit exceeded. Try again later.' }, 429);
+    }
+    rateData.timestamps.push(now);
+  } else {
+    rateLimitMap.set(rateKey, { timestamps: [now] });
+  }
+  // Clean map periodically (keep under 1000 entries)
+  if (rateLimitMap.size > 1000) {
+    var oldest = rateLimitMap.keys().next().value;
+    rateLimitMap.delete(oldest);
   }
 
   // Parse body
@@ -113,7 +144,7 @@ function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, X-API-Key',
     'Access-Control-Max-Age': '86400',
   };
 }

@@ -224,6 +224,7 @@
 // Cloudflare Worker URL for GitHub issue creation
 // Deploy the worker from /worker directory, then paste the URL here
 var WORKER_URL = 'https://pen-to-figma-feedback.old-lab-edfe.workers.dev';
+var API_KEY = '39339ba9c671792b343beb887b495af7349d2df6f242977974903ce863855a52';
 
 // ─── State ───
 var warnings = [];
@@ -372,7 +373,7 @@ function submitFeedback(e) {
 
   fetch(WORKER_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
     body: JSON.stringify(payload)
   })
   .then(function(res) { return res.json().then(function(data) { return { ok: res.ok, data: data }; }); })
