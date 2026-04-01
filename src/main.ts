@@ -1169,6 +1169,14 @@ async function importDocument(data: any, pageMap?: Record<string, string>) {
     return
   }
 
+  // 0. Load all pages upfront to avoid cross-page access errors
+  sendProgress(3, 'Loading all pages...')
+  try {
+    await figma.loadAllPagesAsync()
+  } catch (_eLoad) {
+    // Older API — fall through, individual pages loaded on switch
+  }
+
   sendProgress(5, 'Creating variable collection...')
 
   // 1. Variables
@@ -1254,6 +1262,7 @@ async function importDocument(data: any, pageMap?: Record<string, string>) {
     }
 
     await figma.setCurrentPageAsync(targetPage)
+    try { await targetPage.loadAsync() } catch (_eLP) { /* already loaded */ }
     sendProgress(45 + (pi / Math.max(pageNames.length, 1)) * 10,
       'Organizing: ' + targetPage.name + '...')
 

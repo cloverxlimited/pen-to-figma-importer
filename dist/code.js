@@ -1125,6 +1125,11 @@
             figma.ui.postMessage({ type: "error", text: "No nodes found in document" });
             return;
           }
+          sendProgress(3, "Loading all pages...");
+          try {
+            yield figma.loadAllPagesAsync();
+          } catch (_eLoad) {
+          }
           sendProgress(5, "Creating variable collection...");
           if (doc.variables) {
             yield createVariables(doc.variables);
@@ -1190,6 +1195,10 @@
               }
             }
             yield figma.setCurrentPageAsync(targetPage);
+            try {
+              yield targetPage.loadAsync();
+            } catch (_eLP) {
+            }
             sendProgress(
               45 + pi / Math.max(pageNames.length, 1) * 10,
               "Organizing: " + targetPage.name + "..."

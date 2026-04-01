@@ -471,6 +471,8 @@ function buildMapper(result) {
   setTimeout(function() { showStep('stepMapper'); }, 400);
 }
 
+var customPages = []; // Track user-created page names
+
 function handlePageSelect(select, screenId) {
   if (select.value === '__new__') {
     // Replace select with text input
@@ -483,13 +485,23 @@ function handlePageSelect(select, screenId) {
       pageAssignments[screenId] = this.value || '__current__';
     });
     input.addEventListener('blur', function() {
-      if (!this.value.trim()) {
+      var val = this.value.trim();
+      if (!val) {
         // Revert to select
-        var parent = this.parentElement;
-        parent.replaceChild(select, this);
+        var par = this.parentElement;
+        par.replaceChild(select, this);
         select.value = '__current__';
         pageAssignments[screenId] = '__current__';
+      } else {
+        // Add this page name to all other dropdowns
+        if (customPages.indexOf(val) === -1) {
+          customPages.push(val);
+          addCustomPageToAllSelects(val);
+        }
       }
+    });
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') { this.blur(); }
     });
     select.parentElement.replaceChild(input, select);
     input.focus();
@@ -497,6 +509,26 @@ function handlePageSelect(select, screenId) {
   } else {
     pageAssignments[screenId] = select.value;
   }
+}
+
+function addCustomPageToAllSelects(pageName) {
+  // Add as an option to all mapper selects that don't already have it
+  var selects = document.querySelectorAll('.mapper-select');
+  selects.forEach(function(sel) {
+    var hasIt = false;
+    for (var i = 0; i < sel.options.length; i++) {
+      if (sel.options[i].value === pageName) { hasIt = true; break; }
+    }
+    if (!hasIt) {
+      var opt = document.createElement('option');
+      opt.value = pageName;
+      opt.textContent = pageName;
+      // Insert before the "+ New Page" option
+      var newPageOpt = sel.querySelector('option[value="__new__"]');
+      if (newPageOpt) { sel.insertBefore(opt, newPageOpt); }
+      else { sel.appendChild(opt); }
+    }
+  });
 }
 
 function escHtml(s) {
