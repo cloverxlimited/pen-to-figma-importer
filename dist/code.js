@@ -1095,7 +1095,343 @@
           return node;
         });
       }
+      function detectAndAdapt(data) {
+        if (data.children && !data.schema)
+          return data;
+        if (Array.isArray(data))
+          return { children: data };
+        if (data.schema === "figma_design_spec/v1" || data.tokens && data.pages && data.components) {
+          sendLog("Detected figma_design_spec format \u2014 converting...", "ok");
+          return adaptFigmaDesignSpec(data);
+        }
+        if (data.pages && Array.isArray(data.pages)) {
+          sendLog("Detected pages-based format \u2014 converting...", "ok");
+          return adaptPagesFormat(data);
+        }
+        if (data.children)
+          return data;
+        return { children: [data] };
+      }
+      function adaptFigmaDesignSpec(spec) {
+        var tokens = spec.tokens || {};
+        var colors = tokens.colors || {};
+        var typography = tokens.typography || {};
+        var effects = tokens.effects || {};
+        var components = spec.components || {};
+        var pages = spec.pages || [];
+        var variables = {};
+        for (var cName in colors) {
+          var safeName = cName.replace(/\./g, "-");
+          var cVal = colors[cName];
+          variables[safeName] = { type: "color", value: parseColorValue(cVal) };
+        }
+        var compNodes = [];
+        var compIdMap = {};
+        for (var compName in components) {
+          var compDef = components[compName];
+          var compId = "_comp_" + compName;
+          compIdMap[compName] = compId;
+          if (compDef.variants) {
+            var firstVariantKey = Object.keys(compDef.variants)[0];
+            var variant = compDef.variants[firstVariantKey];
+            var variantNode = buildSpecFrame(variant, compName, compId, typography, colors, effects);
+            variantNode.reusable = true;
+            compNodes.push(variantNode);
+          } else {
+            var compNode = adaptSpecNode(compDef, typography, colors, effects, compIdMap);
+            compNode.id = compId;
+            compNode.name = "Component/" + compName;
+            compNode.reusable = true;
+            compNodes.push(compNode);
+          }
+        }
+        var screenNodes = [];
+        for (var pi = 0; pi < pages.length; pi++) {
+          var page = pages[pi];
+          var pageFrames = page.frames || [];
+          for (var fi = 0; fi < pageFrames.length; fi++) {
+            var frame = pageFrames[fi];
+            var screenNode = adaptSpecNode(frame, typography, colors, effects, compIdMap);
+            screenNode.name = frame.name || page.name || "Screen " + (pi + 1);
+            screenNodes.push(screenNode);
+          }
+        }
+        return {
+          variables,
+          children: compNodes.concat(screenNodes)
+        };
+      }
+      function adaptPagesFormat(data) {
+        var children = [];
+        var pages = data.pages || [];
+        for (var i = 0; i < pages.length; i++) {
+          var page = pages[i];
+          if (page.frames) {
+            for (var f = 0; f < page.frames.length; f++) {
+              children.push(page.frames[f]);
+            }
+          } else {
+            children.push(page);
+          }
+        }
+        return { variables: data.variables || data.tokens || {}, children };
+      }
+      function adaptSpecNode(node, typo, colors, effects, compIdMap) {
+        if (!node || typeof node !== "object")
+          return node;
+        if (node.componentRef) {
+          var refId = compIdMap[node.componentRef];
+          if (refId) {
+            var inst = { type: "ref", ref: refId, id: genId() };
+            if (node.variant)
+              inst.name = node.componentRef + "/" + node.variant;
+            return inst;
+          }
+          sendLog("Unknown componentRef: " + node.componentRef, "warn");
+          return { type: "frame", id: genId(), name: node.componentRef, fills: [] };
+        }
+        var out = { type: node.type || "frame", id: genId() };
+        if (node.name)
+          out.name = node.name;
+        if (node.size) {
+          if (node.size.w)
+            out.width = node.size.w;
+          if (node.size.h)
+            out.height = node.size.h;
+        }
+        if (node.width)
+          out.width = node.width === "fill" ? "fill_container" : node.width;
+        if (node.height)
+          out.height = node.height;
+        if (node.layout) {
+          if (typeof node.layout === "string") {
+            out.layout = node.layout;
+          } else if (typeof node.layout === "object") {
+            out.layout = node.layout.mode || "vertical";
+            if (node.layout.gap !== void 0)
+              out.gap = node.layout.gap;
+            if (node.layout.padding) {
+              var p = node.layout.padding;
+              if (typeof p === "number")
+                out.padding = p;
+              else if (p.top !== void 0)
+                out.padding = [p.top, p.right || 0, p.bottom || 0, p.left || 0];
+            }
+            if (node.layout.justify === "space-between")
+              out.justifyContent = "space_between";
+            else if (node.layout.justify)
+              out.justifyContent = node.layout.justify;
+            if (node.layout.align)
+              out.alignItems = node.layout.align;
+          }
+        }
+        if (node.fill)
+          out.fill = resolveSpecColor(node.fill, colors);
+        if (node.stroke) {
+          var strokeColor = resolveSpecColor(node.stroke, colors);
+          if (strokeColor)
+            out.stroke = { fill: strokeColor, thickness: 1 };
+        }
+        if (node.radius !== void 0)
+          out.cornerRadius = node.radius;
+        if (node.effects && Array.isArray(node.effects)) {
+          var penEffects = [];
+          for (var ei = 0; ei < node.effects.length; ei++) {
+            var eff = node.effects[ei];
+            if (typeof eff === "string") {
+              var namedEff = effects[eff];
+              if (namedEff)
+                penEffects.push(adaptEffect(namedEff, colors));
+            } else {
+              penEffects.push(adaptEffect(eff, colors));
+            }
+          }
+          if (penEffects.length)
+            out.effect = penEffects.length === 1 ? penEffects[0] : penEffects;
+        }
+        if (node.type === "text") {
+          out.content = node.value || "";
+          if (node.styleRef && typo[node.styleRef]) {
+            var style = typo[node.styleRef];
+            out.fontFamily = style.fontFamily;
+            out.fontSize = node.fontSize || style.fontSize;
+            out.fontWeight = String(style.fontWeight || 400);
+            if (style.letterSpacing)
+              out.letterSpacing = style.letterSpacing;
+            if (style.lineHeight)
+              out.lineHeight = style.lineHeight;
+            if (style.fontStyle)
+              out.fontStyle = style.fontStyle;
+          }
+          if (node.style) {
+            if (node.style.fontFamily)
+              out.fontFamily = node.style.fontFamily;
+            if (node.style.fontSize)
+              out.fontSize = node.style.fontSize;
+            if (node.style.fontWeight)
+              out.fontWeight = String(node.style.fontWeight);
+            if (node.style.color)
+              out.fill = resolveSpecColor(node.style.color, colors);
+          }
+          if (node.color)
+            out.fill = resolveSpecColor(node.color, colors);
+          if (node.maxWidth) {
+            out.textGrowth = "fixed-width";
+            out.width = node.maxWidth;
+          }
+          if (node.textAlign)
+            out.textAlign = node.textAlign;
+        }
+        if (node.type === "line") {
+          out.type = "line";
+          if (node.width === "fill")
+            out.width = "fill_container";
+          if (node.stroke)
+            out.stroke = { fill: resolveSpecColor(node.stroke, colors), thickness: node.height || 1 };
+        }
+        if (node.type === "ellipse") {
+          out.type = "ellipse";
+          if (node.fill)
+            out.fill = resolveSpecColor(node.fill, colors);
+          if (node.stroke)
+            out.stroke = { fill: resolveSpecColor(node.stroke, colors), thickness: 1 };
+          if (node.content) {
+            out.type = "frame";
+            out.layout = "horizontal";
+            out.justifyContent = "center";
+            out.alignItems = "center";
+            if (typeof out.cornerRadius === "undefined" && node.size) {
+              out.cornerRadius = Math.max(node.size.w || 0, node.size.h || 0) / 2;
+            }
+            var innerText = adaptSpecNode(node.content, typo, colors, effects, compIdMap);
+            out.children = [innerText];
+          }
+        }
+        if (node.content && node.type !== "ellipse" && node.type !== "text") {
+          var contentNode = adaptSpecNode(node.content, typo, colors, effects, compIdMap);
+          out.children = [contentNode];
+          if (!out.layout) {
+            out.layout = "horizontal";
+            out.justifyContent = "center";
+            out.alignItems = "center";
+          }
+        }
+        if (node.children && Array.isArray(node.children)) {
+          out.children = node.children.map(function(child) {
+            return adaptSpecNode(child, typo, colors, effects, compIdMap);
+          });
+          if (!out.layout)
+            out.layout = "vertical";
+        }
+        if (node.padding !== void 0 && !out.padding) {
+          if (typeof node.padding === "number")
+            out.padding = node.padding;
+          else if (node.padding.x !== void 0)
+            out.padding = [node.padding.y || 0, node.padding.x, node.padding.y || 0, node.padding.x];
+        }
+        if (node.gap !== void 0 && !out.gap)
+          out.gap = node.gap;
+        return out;
+      }
+      function buildSpecFrame(variant, name, id, typo, colors, effects) {
+        var node = {
+          type: "frame",
+          id,
+          name: "Component/" + name,
+          cornerRadius: variant.radius || 0,
+          fill: resolveSpecColor(variant.fill || "", colors),
+          layout: "vertical",
+          padding: variant.padding || 16,
+          gap: 8
+        };
+        if (variant.stroke)
+          node.stroke = { fill: resolveSpecColor(variant.stroke, colors), thickness: 1 };
+        if (variant.effects && Array.isArray(variant.effects)) {
+          var efs = [];
+          for (var i = 0; i < variant.effects.length; i++) {
+            var e = variant.effects[i];
+            if (typeof e === "string" && effects[e])
+              efs.push(adaptEffect(effects[e], colors));
+            else if (typeof e === "object")
+              efs.push(adaptEffect(e, colors));
+          }
+          if (efs.length)
+            node.effect = efs.length === 1 ? efs[0] : efs;
+        }
+        node.children = [
+          { type: "text", id: genId(), name: "title", content: name, fontFamily: "Jost", fontSize: 11, fontWeight: "400", letterSpacing: 0.18, fill: resolveSpecColor(variant.titleColor || "#000", colors) },
+          { type: "text", id: genId(), name: "body", content: "Description", fontFamily: "Jost", fontSize: 12, fontWeight: "300", fill: resolveSpecColor(variant.bodyColor || "#666", colors) }
+        ];
+        return node;
+      }
+      function adaptEffect(eff, colors) {
+        if (eff.type === "dropShadow") {
+          return {
+            type: "shadow",
+            shadowType: "outer",
+            offset: { x: eff.x || 0, y: eff.y || 0 },
+            blur: eff.blur || 10,
+            spread: eff.spread || 0,
+            color: resolveSpecColor(eff.color || "#00000020", colors)
+          };
+        }
+        return { type: "shadow", blur: 4, color: "#00000020", offset: { x: 0, y: 4 } };
+      }
+      function resolveSpecColor(val, colors) {
+        if (typeof val !== "string")
+          return "#000000";
+        var tokenMatch = val.match(/^\{colors\.(.+)\}$/);
+        if (tokenMatch) {
+          var tokenName = tokenMatch[1];
+          if (colors[tokenName])
+            return parseColorValue(colors[tokenName]);
+          return "#000000";
+        }
+        var gradMatch = val.match(/^linear-gradient\((\d+)deg,\s*(.+)\)$/);
+        if (gradMatch) {
+          var angle = parseInt(gradMatch[1]);
+          var stopsStr = gradMatch[2];
+          var stopParts = stopsStr.split(/,\s*(?=[#r])/);
+          var gradColors = [];
+          for (var i = 0; i < stopParts.length; i++) {
+            var sp = stopParts[i].trim().split(/\s+/);
+            var c = parseColorValue(sp[0]);
+            var pos = sp[1] ? parseInt(sp[1]) / 100 : i / Math.max(stopParts.length - 1, 1);
+            gradColors.push({ color: c, position: pos });
+          }
+          return { type: "gradient", gradientType: "linear", rotation: angle, colors: gradColors };
+        }
+        return parseColorValue(val);
+      }
+      function parseColorValue(val) {
+        if (typeof val !== "string")
+          return "#000000";
+        if (val.startsWith("#"))
+          return val;
+        var rgbaMatch = val.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)$/);
+        if (rgbaMatch) {
+          var r = parseInt(rgbaMatch[1]);
+          var g = parseInt(rgbaMatch[2]);
+          var b = parseInt(rgbaMatch[3]);
+          var a = rgbaMatch[4] !== void 0 ? parseFloat(rgbaMatch[4]) : 1;
+          var hex = "#" + toHex(r) + toHex(g) + toHex(b);
+          if (a < 1)
+            hex += toHex(Math.round(a * 255));
+          return hex;
+        }
+        return val;
+      }
+      function toHex(n) {
+        var h = n.toString(16);
+        return h.length === 1 ? "0" + h : h;
+      }
+      var _idCounter = 0;
+      function genId() {
+        _idCounter++;
+        return "_a" + _idCounter.toString(36) + Math.random().toString(36).slice(2, 6);
+      }
       function scanDocument(data) {
+        data = detectAndAdapt(data);
         const doc = Array.isArray(data) ? { children: data } : data;
         const children = doc.children || [];
         const allReusableIds = /* @__PURE__ */ new Set();
@@ -1149,7 +1485,9 @@
           componentMap.clear();
           varValues.clear();
           figmaVars.clear();
+          _idCounter = 0;
           stats = { frames: 0, texts: 0, rects: 0, components: 0, instances: 0, variables: 0, vectors: 0 };
+          data = detectAndAdapt(data);
           const doc = Array.isArray(data) ? { children: data } : data;
           const children = doc.children || [];
           if (children.length === 0) {
