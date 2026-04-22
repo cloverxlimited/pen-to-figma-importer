@@ -1,6 +1,7 @@
 name = "pen-to-figma-renderer"
 main = "index.js"
 compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
 
 # Browser rendering requires Workers Paid plan ($5/month)
 browser = { binding = "BROWSER" }
