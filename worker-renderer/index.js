@@ -74,7 +74,7 @@ export default {
       }
 
       // Wait a bit for any animations/transitions to settle
-      await page.waitForTimeout(500);
+      await new Promise(function(r) { setTimeout(r, 500); });
 
       // Walk the DOM inside the browser context
       var result = await page.evaluate(function (opts) {
@@ -134,7 +134,7 @@ export default {
           return { type: "gradient", gradientType: "linear", rotation: parseInt(m[1]), colors: colors };
         }
 
-        function walk(el, depth) {
+        function walk(el, depth, parentRect) {
           if (depth > opts.maxDepth) return null;
           if (!el || el.nodeType !== 1) return null;
           var tag = el.tagName.toLowerCase();
@@ -150,9 +150,12 @@ export default {
           if (rect.width > 0) node.width = Math.round(rect.width);
           if (rect.height > 0) node.height = Math.round(rect.height);
 
-          if (depth <= 1 || cs.position === "absolute" || cs.position === "fixed") {
-            node.x = Math.round(rect.left);
-            node.y = Math.round(rect.top);
+          // Only set position for absolutely/fixed positioned elements, relative to parent
+          var isAbsFixed = cs.position === "absolute" || cs.position === "fixed";
+          if (isAbsFixed && parentRect) {
+            node.x = Math.round(rect.left - parentRect.left);
+            node.y = Math.round(rect.top - parentRect.top);
+            node.layoutPosition = "absolute";
           }
 
           // Background
@@ -238,7 +241,7 @@ export default {
               }
             }
             if (child.nodeType === 1) {
-              var cn = walk(child, depth + 1);
+              var cn = walk(child, depth + 1, rect);
               if (cn) children.push(cn);
             }
           }
@@ -248,11 +251,24 @@ export default {
             if (!node.layout && children.length > 1) node.layout = "vertical";
           }
 
-          // Collapse single-text wrappers
-          if (children.length === 1 && children[0].type === "text" && !node.fill && !node.stroke && !node.effect) {
+          // Collapse single-text wrappers (div > text with no visual props)
+          if (children.length === 1 && children[0].type === "text" && !node.fill && !node.stroke && !node.effect && !node.cornerRadius) {
             var merged = children[0];
             if (node.width) { merged.textGrowth = "fixed-width"; merged.width = node.width; }
             return merged;
+          }
+
+          // Skip empty wrapper frames with no visual properties and no layout
+          var hasVisual = node.fill || node.stroke || node.effect || node.cornerRadius || node.opacity < 1 || node.clip;
+          if (!hasVisual && children.length === 0 && node.type === "frame") return null;
+
+          // Unwrap single-child frames with no visual properties
+          if (!hasVisual && children.length === 1 && !node.layout && !node.padding && !node.gap) {
+            var only = children[0];
+            // Keep size from parent if child doesn't have it
+            if (!only.width && node.width) only.width = node.width;
+            if (!only.height && node.height) only.height = node.height;
+            return only;
           }
 
           return node;
@@ -282,7 +298,7 @@ export default {
           }
         } catch (e) {}
 
-        var root = walk(document.body, 0);
+        var root = walk(document.body, 0, null);
         return {
           variables: variables,
           children: root ? (root.children || [root]) : [],
