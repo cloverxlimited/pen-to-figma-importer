@@ -408,7 +408,6 @@
 <script>
 // ─── CONFIG ───
 var WORKER_URL = 'https://pen-to-figma-feedback.old-lab-edfe.workers.dev';
-var API_KEY = '39339ba9c671792b343beb887b495af7349d2df6f242977974903ce863855a52';
 var PLUGIN_VERSION = 'v1.1.0';
 
 // ─── State ───
@@ -794,7 +793,7 @@ function submitFeedback(e) {
 
   fetch(WORKER_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   })
   .then(function(res) { return res.json().then(function(d) { return { ok: res.ok, data: d }; }); })
