@@ -5,6 +5,10 @@
 // ─── State ──────────────────────────────────────────────────
 
 const componentMap = new Map<string, ComponentNode>()
+// Variant components (entries with `type: 'ref' + reusable: true`) are stored
+// as already-styled InstanceNodes here; references to them are served by
+// cloning the registered instance to preserve descendant overrides.
+const variantInstanceMap = new Map<string, InstanceNode>()
 const varValues = new Map<string, any>()
 const figmaVars = new Map<string, Variable>()
 let collectionModeId = ''
@@ -22,10 +26,15 @@ function sendLog(text: string, level = '') {
 // ─── Color Utilities ────────────────────────────────────────
 
 function parseHex(hex: string): { r: number; g: number; b: number; a: number } {
+  // Magenta fallback — loud, visible failure for malformed/non-hex input.
+  // Beats silent NaN, which Figma's fills validator rejects with cryptic errors.
+  const fallback = { r: 1, g: 0, b: 1, a: 1 }
+  if (typeof hex !== 'string') return fallback
   hex = hex.replace('#', '')
   if (hex.length === 3) {
     hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2]
   }
+  if (!/^[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(hex)) return fallback
   const r = parseInt(hex.slice(0, 2), 16) / 255
   const g = parseInt(hex.slice(2, 4), 16) / 255
   const b = parseInt(hex.slice(4, 6), 16) / 255
@@ -108,7 +117,10 @@ type SizeMode = 'FIXED' | 'HUG' | 'FILL'
 function parseSizing(v: any): { mode: SizeMode; fallback?: number } {
   if (typeof v === 'number') return { mode: 'FIXED', fallback: v }
   if (typeof v === 'string') {
-    if (v.startsWith('fill_container')) return { mode: 'FILL' }
+    if (v.startsWith('fill_container')) {
+      const m = v.match(/fill_container\((\d+)\)/)
+      return { mode: 'FILL', fallback: m ? +m[1] : undefined }
+    }
     if (v.startsWith('fit_content')) {
       const m = v.match(/fit_content\((\d+)\)/)
       return { mode: 'HUG', fallback: m ? +m[1] : undefined }
@@ -122,15 +134,101 @@ function parseSizing(v: any): { mode: SizeMode; fallback?: number } {
 
 // ─── Variable Collection ────────────────────────────────────
 
-async function createVariables(vars: Record<string, any>) {
+// Newer exports wrap the var map in a { themes, variables } envelope.
+// Older exports were a flat { '--name': {type, value}, ... } map.
+// Detect and unwrap.
+function unwrapVarMap(vars: Record<string, any>): Record<string, any> {
+  if (vars && typeof vars.variables === 'object' && !vars.variables.type) {
+    return vars.variables
+  }
+  return vars
+}
+
+// Multi-mode color values export as an array like
+//   [{value: "#F2F3F0"}, {theme: {Mode: "Dark"}, value: "#111111"}]
+// Until we wire real Figma modes per theme, pick the default (no-theme) entry.
+function defaultModeValue(raw: any): any {
+  if (Array.isArray(raw) && raw.length > 0 && typeof raw[0] === 'object' && raw[0] !== null && 'value' in raw[0]) {
+    const def = raw.find((e: any) => !e.theme) || raw[0]
+    return def.value
+  }
+  return raw
+}
+
+async function createVariables(rawVars: Record<string, any>) {
+  if (!rawVars || Object.keys(rawVars).length === 0) return
+
+  // Themes live in the outer envelope, alongside (not inside) the variable map.
+  // Shape: { themes: { Mode: ["Light", "Dark"] }, variables: { ... } }
+  const themes = (rawVars.themes && typeof rawVars.themes === 'object' && !Array.isArray(rawVars.themes))
+    ? rawVars.themes : null
+  const vars = unwrapVarMap(rawVars)
   if (!vars || Object.keys(vars).length === 0) return
 
   const collection = figma.variables.createVariableCollection('Pen Design Tokens')
-  collectionModeId = collection.modes[0].modeId
-  collection.renameMode(collectionModeId, 'Default')
+
+  // Build modeMap: theme value (e.g. "Dark") → Figma modeId.
+  // Supports single-theme-group designs (the common case). The first option in
+  // the group becomes Figma's default mode; subsequent options become added
+  // modes (paid plan; on free plan addMode throws and we skip with a warning).
+  const modeMap: Record<string, string> = {}
+  let themeKey: string | null = null
+  let defaultModeName = 'Default'
+
+  if (themes) {
+    const themeKeys = Object.keys(themes)
+    if (themeKeys.length === 1 && Array.isArray(themes[themeKeys[0]])) {
+      themeKey = themeKeys[0]
+      const modeNames = themes[themeKey] as string[]
+      if (modeNames.length > 0) {
+        defaultModeName = modeNames[0]
+        collection.renameMode(collection.modes[0].modeId, modeNames[0])
+        modeMap[modeNames[0]] = collection.modes[0].modeId
+        for (let i = 1; i < modeNames.length; i++) {
+          try {
+            const id = collection.addMode(modeNames[i])
+            modeMap[modeNames[i]] = id
+          } catch (_e) {
+            sendLog(`Couldn't add mode "${modeNames[i]}" — multi-mode collections require Figma's paid plan; only the default mode will be populated`, 'warn')
+          }
+        }
+      }
+    }
+  }
+
+  if (Object.keys(modeMap).length === 0) {
+    collection.renameMode(collection.modes[0].modeId, 'Default')
+    modeMap[defaultModeName] = collection.modes[0].modeId
+  }
+
+  collectionModeId = modeMap[defaultModeName]
+
+  function applyValue(v: Variable, type: string, value: any, modeId: string) {
+    if (type === 'color' && typeof value === 'string' && !isVar(value)) {
+      const { r, g, b, a } = parseHex(value)
+      v.setValueForMode(modeId, { r, g, b, a })
+    } else if (type === 'number' && typeof value === 'number') {
+      v.setValueForMode(modeId, value)
+    } else if (type === 'string' && typeof value === 'string' && !isVar(value)) {
+      v.setValueForMode(modeId, value)
+    } else if (type === 'boolean' && typeof value === 'boolean') {
+      v.setValueForMode(modeId, value)
+    }
+  }
+
+  function modeForEntry(entry: any): string {
+    if (entry && entry.theme && themeKey && entry.theme[themeKey] && modeMap[entry.theme[themeKey]]) {
+      return modeMap[entry.theme[themeKey]]
+    }
+    return modeMap[defaultModeName]
+  }
 
   for (const [name, def] of Object.entries(vars)) {
-    varValues.set(name, def.value)
+    if (!def || typeof def !== 'object') continue
+
+    // For $-reference resolution elsewhere in the codebase: store the default
+    // mode's value, since callers like buildPaint resolve to a single string.
+    varValues.set(name, defaultModeValue(def.value))
 
     const typeMap: Record<string, VariableResolvedDataType> = {
       color: 'COLOR', number: 'FLOAT', string: 'STRING', boolean: 'BOOLEAN',
@@ -142,44 +240,54 @@ async function createVariables(vars: Record<string, any>) {
       const v = figma.variables.createVariable(name, collection, resolvedType)
       figmaVars.set(name, v)
 
-      const raw = def.value
-      if (def.type === 'color' && typeof raw === 'string' && !isVar(raw)) {
-        const { r, g, b, a } = parseHex(raw)
-        v.setValueForMode(collectionModeId, { r, g, b, a })
-      } else if (def.type === 'number' && typeof raw === 'number') {
-        v.setValueForMode(collectionModeId, raw)
-      } else if (def.type === 'string' && typeof raw === 'string' && !isVar(raw)) {
-        v.setValueForMode(collectionModeId, raw)
-      } else if (def.type === 'boolean' && typeof raw === 'boolean') {
-        v.setValueForMode(collectionModeId, raw)
+      if (Array.isArray(def.value)) {
+        for (const entry of def.value) {
+          if (!entry || typeof entry !== 'object') continue
+          applyValue(v, def.type, entry.value, modeForEntry(entry))
+        }
+      } else {
+        applyValue(v, def.type, def.value, modeMap[defaultModeName])
       }
+
       stats.variables++
     } catch (e: any) {
       sendLog(`Variable "${name}": ${e.message}`, 'warn')
     }
   }
 
-  // Second pass: resolve variable-to-variable aliases
+  // Second pass: resolve variable-to-variable aliases (one alias per mode if
+  // each mode entry is itself a $-ref, otherwise just the default mode).
   for (const [name, def] of Object.entries(vars)) {
-    if (isVar(def.value)) {
-      const target = figmaVars.get(varName(def.value))
-      const source = figmaVars.get(name)
-      if (target && source) {
-        try {
-          source.setValueForMode(collectionModeId, { type: 'VARIABLE_ALIAS', id: target.id })
-        } catch (_e) {
-          // Fallback: set concrete value
-          const concrete = resolve(def.value)
-          if (def.type === 'color' && typeof concrete === 'string') {
-            const { r, g, b, a } = parseHex(concrete)
-            source.setValueForMode(collectionModeId, { r, g, b, a })
-          }
+    if (!def || typeof def !== 'object') continue
+    const source = figmaVars.get(name)
+    if (!source) continue
+
+    function setAliasForMode(aliasValue: any, modeId: string) {
+      if (!isVar(aliasValue)) return
+      const target = figmaVars.get(varName(aliasValue))
+      if (!target) return
+      try {
+        source!.setValueForMode(modeId, { type: 'VARIABLE_ALIAS', id: target.id })
+      } catch (_e) {
+        const concrete = resolve(aliasValue)
+        if (def.type === 'color' && typeof concrete === 'string') {
+          const { r, g, b, a } = parseHex(concrete)
+          source!.setValueForMode(modeId, { r, g, b, a })
         }
       }
     }
+
+    if (Array.isArray(def.value)) {
+      for (const entry of def.value) {
+        if (entry && isVar(entry.value)) setAliasForMode(entry.value, modeForEntry(entry))
+      }
+    } else if (isVar(def.value)) {
+      setAliasForMode(def.value, modeMap[defaultModeName])
+    }
   }
 
-  sendLog(`Created ${stats.variables} variables`, 'ok')
+  const modeCount = Object.keys(modeMap).length
+  sendLog(`Created ${stats.variables} variables across ${modeCount} mode${modeCount === 1 ? '' : 's'}`, 'ok')
 }
 
 // ─── Paint / Fill Building ──────────────────────────────────
@@ -432,7 +540,15 @@ function applySizing(node: SceneNode, pen: any, parentLayout: boolean) {
           fn.layoutSizingHorizontal = 'FIXED'
           fn.resize(s.fallback, Math.max(fn.height, 1))
         }
+        // FILL without parent layout (top-level frames) — use the fallback if
+        // one was declared, e.g. "fill_container(640)" becomes 640px fixed.
+        else if (s.mode === 'FILL' && s.fallback && s.fallback > 0) {
+          fn.layoutSizingHorizontal = 'FIXED'
+          fn.resize(s.fallback, Math.max(fn.height, 1))
+        }
       } else if (s.mode === 'FIXED' && s.fallback && s.fallback > 0 && 'resize' in node) {
+        (node as any).resize(s.fallback, Math.max((node as any).height || 1, 1))
+      } else if (s.mode === 'FILL' && s.fallback && s.fallback > 0 && 'resize' in node) {
         (node as any).resize(s.fallback, Math.max((node as any).height || 1, 1))
       }
     }
@@ -447,7 +563,13 @@ function applySizing(node: SceneNode, pen: any, parentLayout: boolean) {
           fn.layoutSizingVertical = 'FIXED'
           fn.resize(Math.max(fn.width, 1), s.fallback)
         }
+        else if (s.mode === 'FILL' && s.fallback && s.fallback > 0) {
+          fn.layoutSizingVertical = 'FIXED'
+          fn.resize(Math.max(fn.width, 1), s.fallback)
+        }
       } else if (s.mode === 'FIXED' && s.fallback && s.fallback > 0 && 'resize' in node) {
+        (node as any).resize(Math.max((node as any).width || 1, 1), s.fallback)
+      } else if (s.mode === 'FILL' && s.fallback && s.fallback > 0 && 'resize' in node) {
         (node as any).resize(Math.max((node as any).width || 1, 1), s.fallback)
       }
     }
@@ -461,6 +583,8 @@ function applySizing(node: SceneNode, pen: any, parentLayout: boolean) {
           const ws = parseSizing(pen.width)
           if (ws.mode === 'FILL' && parentLayout) {
             (tn as any).layoutSizingHorizontal = 'FILL'
+          } else if (ws.mode === 'FILL' && ws.fallback) {
+            tn.resize(ws.fallback, tn.height)
           } else if (ws.mode === 'FIXED' && ws.fallback) {
             tn.resize(ws.fallback, tn.height)
           }
@@ -498,16 +622,18 @@ function applyCommon(node: SceneNode, pen: any) {
   // Visibility
   if (pen.enabled === false) node.visible = false
 
-  // Corner radius
+  // Corner radius — value may be a number, a variable string (e.g.
+  // "$--radius-pill"), or a 4-element array.
   if ('cornerRadius' in node && pen.cornerRadius !== undefined) {
     const cr = pen.cornerRadius
-    if (typeof cr === 'number') {
-      (node as any).cornerRadius = cr
-    } else if (Array.isArray(cr) && cr.length === 4) {
+    if (Array.isArray(cr) && cr.length === 4) {
       (node as any).topLeftRadius = resolveNum(cr[0]) ?? 0;
       (node as any).topRightRadius = resolveNum(cr[1]) ?? 0;
       (node as any).bottomRightRadius = resolveNum(cr[2]) ?? 0;
       (node as any).bottomLeftRadius = resolveNum(cr[3]) ?? 0
+    } else {
+      const n = resolveNum(cr)
+      if (n !== null) (node as any).cornerRadius = n
     }
   }
 
@@ -608,8 +734,9 @@ async function createText(pen: any): Promise<TextNode> {
 
 // ─── Frame / Component Creation ─────────────────────────────
 
-function createFrameBase(pen: any, asComponent: boolean): FrameNode | ComponentNode {
-  const node = asComponent ? figma.createComponent() : figma.createFrame()
+function createFrameBase(pen: any, asComponent: boolean, existing?: FrameNode | ComponentNode): FrameNode | ComponentNode {
+  // If pre-registered (two-pass component creation), populate the existing shell.
+  const node = existing || (asComponent ? figma.createComponent() : figma.createFrame())
 
   // Clear default fills — .pen frames have no fill by default
   node.fills = []
@@ -629,14 +756,24 @@ function createFrameBase(pen: any, asComponent: boolean): FrameNode | ComponentN
 
 async function createInstance(pen: any): Promise<InstanceNode | null> {
   const refId = pen.ref
-  const comp = componentMap.get(refId)
-  if (!comp) {
-    sendLog(`Missing component ref: ${refId}`, 'warn')
-    return null
-  }
 
-  const instance = comp.createInstance()
-  stats.instances++
+  // Variants are stored as pre-styled InstanceNodes. Cloning preserves the
+  // descendant overrides applied when the variant was built, without the
+  // wrapping-component nesting that confused Figma's instance machinery.
+  const variantBase = variantInstanceMap.get(refId)
+  let instance: InstanceNode
+  if (variantBase) {
+    instance = variantBase.clone() as InstanceNode
+    stats.instances++
+  } else {
+    const comp = componentMap.get(refId)
+    if (!comp) {
+      sendLog(`Missing component ref: ${refId}`, 'warn')
+      return null
+    }
+    instance = comp.createInstance()
+    stats.instances++
+  }
 
   // Apply root-level overrides (properties on the ref node itself, excluding type/ref/id/descendants)
   const skipKeys = new Set(['type', 'ref', 'id', 'name', 'descendants', 'children', 'x', 'y', 'reusable'])
@@ -713,7 +850,8 @@ function applyPropertyOverride(node: SceneNode, key: string, val: any) {
         break
       case 'cornerRadius':
         if ('cornerRadius' in node) {
-          if (typeof val === 'number') (node as any).cornerRadius = val
+          const n = resolveNum(val)
+          if (n !== null) (node as any).cornerRadius = n
         }
         break
       case 'width':
@@ -787,8 +925,22 @@ async function applyDescendantOverrides(node: SceneNode, overrides: any) {
       } else {
         sendLog(`Missing component for replacement ref: ${overrides.ref}`, 'warn')
       }
+    } else if (overrides.type === 'frame' || overrides.type === 'group') {
+      // Figma instances don't allow structural replacement. Best-effort: apply
+      // the override's surface properties (fill/stroke/cornerRadius/etc.) to
+      // the existing slot, then fall through so the code below also handles
+      // anything else override-able. Icon-symbol swaps won't work this way —
+      // those require modeling icons as Instances in the source.
+      if (overrides.fill !== undefined && 'fills' in node) applyFills(node as MinimalFillsMixin, overrides.fill)
+      if (overrides.stroke !== undefined) applyStroke(node, overrides.stroke)
+      if (overrides.effect !== undefined) applyEffects(node as any, overrides.effect)
+      if (overrides.cornerRadius !== undefined && 'cornerRadius' in node) {
+        const n = resolveNum(overrides.cornerRadius)
+        if (n !== null) (node as any).cornerRadius = n
+      }
+      return
     } else {
-      // Other replacement types (frame, text, etc.) — log and skip
+      // Other replacement types (text, etc.) — log and skip
       sendLog(`Subtree replacement type "${overrides.type}" not yet supported`, 'warn')
     }
     return
@@ -852,7 +1004,8 @@ async function applyDescendantOverrides(node: SceneNode, overrides: any) {
     if (s.mode === 'FIXED' && s.fallback) (node as any).resize((node as any).width, s.fallback)
   }
   if (overrides.cornerRadius !== undefined && 'cornerRadius' in node) {
-    if (typeof overrides.cornerRadius === 'number') (node as any).cornerRadius = overrides.cornerRadius
+    const n = resolveNum(overrides.cornerRadius)
+    if (n !== null) (node as any).cornerRadius = n
   }
   if (overrides.enabled === false) node.visible = false
 }
@@ -994,6 +1147,28 @@ async function buildNode(pen: any, parent: BaseNode & ChildrenMixin, parentLayou
       // Position
       if (pen.x !== undefined) inst.x = pen.x
       if (pen.y !== undefined) inst.y = pen.y
+      // Top-level instances (e.g. variants on the Components page) need
+      // explicit sizing — otherwise they keep the source component's size and
+      // overflow / collapse the contained text.
+      if (pen.width !== undefined) {
+        const w = parseSizing(pen.width)
+        if (w.fallback && w.fallback > 0 && 'resize' in inst) {
+          try { (inst as any).resize(w.fallback, inst.height) } catch (_eW) { /* ignore */ }
+        }
+      }
+      if (pen.height !== undefined) {
+        const h = parseSizing(pen.height)
+        if (h.fallback && h.fallback > 0 && 'resize' in inst) {
+          try { (inst as any).resize(inst.width, h.fallback) } catch (_eH) { /* ignore */ }
+        }
+      }
+    }
+
+    // Variant pattern: a reusable type='ref' becomes the canonical "variant
+    // instance" for its id. Later references look this up and clone, so they
+    // inherit the descendant overrides applied during creation.
+    if (pen.reusable === true && pen.id && !variantInstanceMap.has(pen.id)) {
+      variantInstanceMap.set(pen.id, inst)
     }
 
     return inst
@@ -1005,12 +1180,14 @@ async function buildNode(pen: any, parent: BaseNode & ChildrenMixin, parentLayou
     case 'frame':
     case 'group': {
       const isComp = pen.reusable === true
-      const frame = createFrameBase(pen, isComp)
+      const preRegistered = (isComp && pen.id) ? componentMap.get(pen.id) : undefined
+      const frame = createFrameBase(pen, isComp, preRegistered)
       if (isComp) stats.components++
       else stats.frames++
 
       applyCommon(frame, pen)
-      parent.appendChild(frame)
+      // Pre-registered components are already parented to componentsPage.
+      if (!preRegistered) parent.appendChild(frame)
 
       // Position & sizing after parenting
       if (parentLayout) {
@@ -1018,14 +1195,16 @@ async function buildNode(pen: any, parent: BaseNode & ChildrenMixin, parentLayou
       } else {
         if (pen.x !== undefined) frame.x = pen.x
         if (pen.y !== undefined) frame.y = pen.y
-        // For top-level frames, set explicit size
+        // For top-level frames, set explicit size. Accept both FIXED and
+        // FILL-with-fallback so that e.g. "fill_container(640)" becomes 640px
+        // when there's no parent layout to fill against.
         const w = parseSizing(pen.width)
         const h = parseSizing(pen.height)
-        if (w.mode === 'FIXED' && w.fallback) {
+        if ((w.mode === 'FIXED' || w.mode === 'FILL') && w.fallback) {
           frame.layoutSizingHorizontal = 'FIXED'
           frame.resize(w.fallback, frame.height)
         }
-        if (h.mode === 'FIXED' && h.fallback) {
+        if ((h.mode === 'FIXED' || h.mode === 'FILL') && h.fallback) {
           frame.layoutSizingVertical = 'FIXED'
           frame.resize(frame.width, h.fallback)
         }
@@ -1473,6 +1652,64 @@ function genId(): string {
   return '_a' + _idCounter.toString(36) + Math.random().toString(36).slice(2, 6)
 }
 
+// Dependencies-first ordering so a component that creates an instance of
+// another finds it fully built. Cycles fall back to source order — the first
+// component in each cycle to be visited will see empty refs for the rest.
+function topoSortComponents(components: any[]): any[] {
+  const byId: Record<string, any> = {}
+  for (const c of components) {
+    if (c && c.id) byId[c.id] = c
+  }
+
+  function collectRefs(node: any, out: Set<string>) {
+    if (!node || typeof node !== 'object') return
+    if (node.type === 'ref' && node.ref) out.add(node.ref)
+    if (Array.isArray(node.children)) {
+      for (const child of node.children) collectRefs(child, out)
+    }
+    if (node.descendants && typeof node.descendants === 'object') {
+      for (const d of Object.values(node.descendants)) collectRefs(d, out)
+    }
+  }
+
+  const deps: Record<string, string[]> = {}
+  for (const c of components) {
+    if (!c || !c.id) continue
+    const refs = new Set<string>()
+    // Variant pattern: a component itself can be `type: "ref"` (e.g.
+    // Alert/Error is a reusable that refs Alert/Info with overrides). Treat
+    // the component's own ref as a dependency.
+    if (c.type === 'ref' && c.ref) refs.add(c.ref)
+    if (Array.isArray(c.children)) {
+      for (const child of c.children) collectRefs(child, refs)
+    }
+    if (c.descendants && typeof c.descendants === 'object') {
+      for (const d of Object.values(c.descendants)) collectRefs(d, refs)
+    }
+    deps[c.id] = Array.from(refs).filter(r => r !== c.id && byId[r])
+  }
+
+  const sorted: any[] = []
+  const visited = new Set<string>()
+  const visiting = new Set<string>()
+  function visit(id: string) {
+    if (visited.has(id) || visiting.has(id)) return
+    visiting.add(id)
+    for (const dep of deps[id] || []) visit(dep)
+    visiting.delete(id)
+    visited.add(id)
+    sorted.push(byId[id])
+  }
+  for (const c of components) {
+    if (c && c.id) visit(c.id)
+  }
+  // Append any without an id (shouldn't happen, but preserve them).
+  for (const c of components) {
+    if (!c || !c.id) sorted.push(c)
+  }
+  return sorted
+}
+
 // ─── Scan: Extract screens + existing pages for the mapper ──
 
 function scanDocument(data: any) {
@@ -1533,6 +1770,7 @@ function scanDocument(data: any) {
 async function importDocument(data: any, pageMap?: Record<string, string>) {
   // Reset state
   componentMap.clear()
+  variantInstanceMap.clear()
   varValues.clear()
   figmaVars.clear()
   _idCounter = 0
@@ -1609,18 +1847,43 @@ async function importDocument(data: any, pageMap?: Record<string, string>) {
   sendProgress(25, 'Building components...')
   await figma.setCurrentPageAsync(componentsPage)
 
-  for (let i = 0; i < components.length; i++) {
-    const pen = components[i]
-    const orig = { ...pen, x: (i % 5) * 300, y: Math.floor(i / 5) * 250 }
+  // 5a. Pre-register every regular reusable as an empty ComponentNode so
+  // cross-component refs resolve regardless of build order. buildNode reuses
+  // these shells when it encounters their IDs. Variants (entries that are
+  // themselves type='ref') are handled differently — they're built as styled
+  // Instances and registered in variantInstanceMap, then cloned per reference.
+  for (const comp of components) {
+    if (comp.type === 'ref') continue
+    if (comp.id && !componentMap.has(comp.id)) {
+      const shell = figma.createComponent()
+      shell.name = comp.name || comp.id
+      componentsPage.appendChild(shell)
+      componentMap.set(comp.id, shell)
+    }
+  }
+
+  // 5b. Build in topological order so dependencies are populated before any
+  // component that instantiates them. Without this, A → ref(B) would create
+  // an instance of B's empty shell, and B's descendant overrides would fail.
+  const sortedComponents = topoSortComponents(components)
+
+  // Keep grid positions tied to original source order, not build order.
+  const origIdx: Record<string, number> = {}
+  components.forEach((c, i) => { if (c.id) origIdx[c.id] = i })
+
+  for (let i = 0; i < sortedComponents.length; i++) {
+    const pen = sortedComponents[i]
+    const pi = pen.id != null ? (origIdx[pen.id] ?? i) : i
+    const orig = { ...pen, x: (pi % 5) * 300, y: Math.floor(pi / 5) * 250 }
     try {
       await buildNode(orig, figma.currentPage, false)
     } catch (_e4) {
       sendLog('Component error: ' + (pen.name || pen.id) + ': ' + (_e4 as any).message, 'warn')
     }
-    sendProgress(25 + (i / Math.max(components.length, 1)) * 20,
+    sendProgress(25 + (i / Math.max(sortedComponents.length, 1)) * 20,
       'Building ' + (pen.name || pen.id) + '...')
   }
-  sendLog('Created ' + components.length + ' components', 'ok')
+  sendLog('Created ' + sortedComponents.length + ' components', 'ok')
 
   // 6. Group screens by target page
   const pageGroups: Record<string, any[]> = {}

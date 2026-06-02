@@ -48,6 +48,7 @@
   var require_main = __commonJS({
     "src/main.ts"(exports) {
       var componentMap = /* @__PURE__ */ new Map();
+      var variantInstanceMap = /* @__PURE__ */ new Map();
       var varValues = /* @__PURE__ */ new Map();
       var figmaVars = /* @__PURE__ */ new Map();
       var collectionModeId = "";
@@ -59,10 +60,15 @@
         figma.ui.postMessage({ type: "log", text, level });
       }
       function parseHex(hex) {
+        const fallback = { r: 1, g: 0, b: 1, a: 1 };
+        if (typeof hex !== "string")
+          return fallback;
         hex = hex.replace("#", "");
         if (hex.length === 3) {
           hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
         }
+        if (!/^[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(hex))
+          return fallback;
         const r = parseInt(hex.slice(0, 2), 16) / 255;
         const g = parseInt(hex.slice(2, 4), 16) / 255;
         const b = parseInt(hex.slice(4, 6), 16) / 255;
@@ -153,8 +159,10 @@
         if (typeof v === "number")
           return { mode: "FIXED", fallback: v };
         if (typeof v === "string") {
-          if (v.startsWith("fill_container"))
-            return { mode: "FILL" };
+          if (v.startsWith("fill_container")) {
+            const m = v.match(/fill_container\((\d+)\)/);
+            return { mode: "FILL", fallback: m ? +m[1] : void 0 };
+          }
           if (v.startsWith("fit_content")) {
             const m = v.match(/fit_content\((\d+)\)/);
             return { mode: "HUG", fallback: m ? +m[1] : void 0 };
@@ -165,15 +173,78 @@
         }
         return { mode: "FIXED" };
       }
-      function createVariables(vars) {
+      function unwrapVarMap(vars) {
+        if (vars && typeof vars.variables === "object" && !vars.variables.type) {
+          return vars.variables;
+        }
+        return vars;
+      }
+      function defaultModeValue(raw) {
+        if (Array.isArray(raw) && raw.length > 0 && typeof raw[0] === "object" && raw[0] !== null && "value" in raw[0]) {
+          const def = raw.find((e) => !e.theme) || raw[0];
+          return def.value;
+        }
+        return raw;
+      }
+      function createVariables(rawVars) {
         return __async(this, null, function* () {
+          if (!rawVars || Object.keys(rawVars).length === 0)
+            return;
+          const themes = rawVars.themes && typeof rawVars.themes === "object" && !Array.isArray(rawVars.themes) ? rawVars.themes : null;
+          const vars = unwrapVarMap(rawVars);
           if (!vars || Object.keys(vars).length === 0)
             return;
           const collection = figma.variables.createVariableCollection("Pen Design Tokens");
-          collectionModeId = collection.modes[0].modeId;
-          collection.renameMode(collectionModeId, "Default");
+          const modeMap = {};
+          let themeKey = null;
+          let defaultModeName = "Default";
+          if (themes) {
+            const themeKeys = Object.keys(themes);
+            if (themeKeys.length === 1 && Array.isArray(themes[themeKeys[0]])) {
+              themeKey = themeKeys[0];
+              const modeNames = themes[themeKey];
+              if (modeNames.length > 0) {
+                defaultModeName = modeNames[0];
+                collection.renameMode(collection.modes[0].modeId, modeNames[0]);
+                modeMap[modeNames[0]] = collection.modes[0].modeId;
+                for (let i = 1; i < modeNames.length; i++) {
+                  try {
+                    const id = collection.addMode(modeNames[i]);
+                    modeMap[modeNames[i]] = id;
+                  } catch (_e) {
+                    sendLog(`Couldn't add mode "${modeNames[i]}" \u2014 multi-mode collections require Figma's paid plan; only the default mode will be populated`, "warn");
+                  }
+                }
+              }
+            }
+          }
+          if (Object.keys(modeMap).length === 0) {
+            collection.renameMode(collection.modes[0].modeId, "Default");
+            modeMap[defaultModeName] = collection.modes[0].modeId;
+          }
+          collectionModeId = modeMap[defaultModeName];
+          function applyValue(v, type, value, modeId) {
+            if (type === "color" && typeof value === "string" && !isVar(value)) {
+              const { r, g, b, a } = parseHex(value);
+              v.setValueForMode(modeId, { r, g, b, a });
+            } else if (type === "number" && typeof value === "number") {
+              v.setValueForMode(modeId, value);
+            } else if (type === "string" && typeof value === "string" && !isVar(value)) {
+              v.setValueForMode(modeId, value);
+            } else if (type === "boolean" && typeof value === "boolean") {
+              v.setValueForMode(modeId, value);
+            }
+          }
+          function modeForEntry(entry) {
+            if (entry && entry.theme && themeKey && entry.theme[themeKey] && modeMap[entry.theme[themeKey]]) {
+              return modeMap[entry.theme[themeKey]];
+            }
+            return modeMap[defaultModeName];
+          }
           for (const [name, def] of Object.entries(vars)) {
-            varValues.set(name, def.value);
+            if (!def || typeof def !== "object")
+              continue;
+            varValues.set(name, defaultModeValue(def.value));
             const typeMap = {
               color: "COLOR",
               number: "FLOAT",
@@ -186,16 +257,14 @@
             try {
               const v = figma.variables.createVariable(name, collection, resolvedType);
               figmaVars.set(name, v);
-              const raw = def.value;
-              if (def.type === "color" && typeof raw === "string" && !isVar(raw)) {
-                const { r, g, b, a } = parseHex(raw);
-                v.setValueForMode(collectionModeId, { r, g, b, a });
-              } else if (def.type === "number" && typeof raw === "number") {
-                v.setValueForMode(collectionModeId, raw);
-              } else if (def.type === "string" && typeof raw === "string" && !isVar(raw)) {
-                v.setValueForMode(collectionModeId, raw);
-              } else if (def.type === "boolean" && typeof raw === "boolean") {
-                v.setValueForMode(collectionModeId, raw);
+              if (Array.isArray(def.value)) {
+                for (const entry of def.value) {
+                  if (!entry || typeof entry !== "object")
+                    continue;
+                  applyValue(v, def.type, entry.value, modeForEntry(entry));
+                }
+              } else {
+                applyValue(v, def.type, def.value, modeMap[defaultModeName]);
               }
               stats.variables++;
             } catch (e) {
@@ -203,23 +272,39 @@
             }
           }
           for (const [name, def] of Object.entries(vars)) {
-            if (isVar(def.value)) {
-              const target = figmaVars.get(varName(def.value));
-              const source = figmaVars.get(name);
-              if (target && source) {
-                try {
-                  source.setValueForMode(collectionModeId, { type: "VARIABLE_ALIAS", id: target.id });
-                } catch (_e) {
-                  const concrete = resolve(def.value);
-                  if (def.type === "color" && typeof concrete === "string") {
-                    const { r, g, b, a } = parseHex(concrete);
-                    source.setValueForMode(collectionModeId, { r, g, b, a });
-                  }
+            let setAliasForMode2 = function(aliasValue, modeId) {
+              if (!isVar(aliasValue))
+                return;
+              const target = figmaVars.get(varName(aliasValue));
+              if (!target)
+                return;
+              try {
+                source.setValueForMode(modeId, { type: "VARIABLE_ALIAS", id: target.id });
+              } catch (_e) {
+                const concrete = resolve(aliasValue);
+                if (def.type === "color" && typeof concrete === "string") {
+                  const { r, g, b, a } = parseHex(concrete);
+                  source.setValueForMode(modeId, { r, g, b, a });
                 }
               }
+            };
+            var setAliasForMode = setAliasForMode2;
+            if (!def || typeof def !== "object")
+              continue;
+            const source = figmaVars.get(name);
+            if (!source)
+              continue;
+            if (Array.isArray(def.value)) {
+              for (const entry of def.value) {
+                if (entry && isVar(entry.value))
+                  setAliasForMode2(entry.value, modeForEntry(entry));
+              }
+            } else if (isVar(def.value)) {
+              setAliasForMode2(def.value, modeMap[defaultModeName]);
             }
           }
-          sendLog(`Created ${stats.variables} variables`, "ok");
+          const modeCount = Object.keys(modeMap).length;
+          sendLog(`Created ${stats.variables} variables across ${modeCount} mode${modeCount === 1 ? "" : "s"}`, "ok");
         });
       }
       function buildSolidPaint(color, opacity) {
@@ -462,8 +547,13 @@
               else if (s.mode === "FIXED" && s.fallback && s.fallback > 0) {
                 fn.layoutSizingHorizontal = "FIXED";
                 fn.resize(s.fallback, Math.max(fn.height, 1));
+              } else if (s.mode === "FILL" && s.fallback && s.fallback > 0) {
+                fn.layoutSizingHorizontal = "FIXED";
+                fn.resize(s.fallback, Math.max(fn.height, 1));
               }
             } else if (s.mode === "FIXED" && s.fallback && s.fallback > 0 && "resize" in node) {
+              node.resize(s.fallback, Math.max(node.height || 1, 1));
+            } else if (s.mode === "FILL" && s.fallback && s.fallback > 0 && "resize" in node) {
               node.resize(s.fallback, Math.max(node.height || 1, 1));
             }
           }
@@ -478,8 +568,13 @@
               else if (s.mode === "FIXED" && s.fallback && s.fallback > 0) {
                 fn.layoutSizingVertical = "FIXED";
                 fn.resize(Math.max(fn.width, 1), s.fallback);
+              } else if (s.mode === "FILL" && s.fallback && s.fallback > 0) {
+                fn.layoutSizingVertical = "FIXED";
+                fn.resize(Math.max(fn.width, 1), s.fallback);
               }
             } else if (s.mode === "FIXED" && s.fallback && s.fallback > 0 && "resize" in node) {
+              node.resize(Math.max(node.width || 1, 1), s.fallback);
+            } else if (s.mode === "FILL" && s.fallback && s.fallback > 0 && "resize" in node) {
               node.resize(Math.max(node.width || 1, 1), s.fallback);
             }
           }
@@ -491,6 +586,8 @@
                 const ws = parseSizing(pen.width);
                 if (ws.mode === "FILL" && parentLayout) {
                   tn.layoutSizingHorizontal = "FILL";
+                } else if (ws.mode === "FILL" && ws.fallback) {
+                  tn.resize(ws.fallback, tn.height);
                 } else if (ws.mode === "FIXED" && ws.fallback) {
                   tn.resize(ws.fallback, tn.height);
                 }
@@ -522,13 +619,15 @@
           node.visible = false;
         if ("cornerRadius" in node && pen.cornerRadius !== void 0) {
           const cr = pen.cornerRadius;
-          if (typeof cr === "number") {
-            node.cornerRadius = cr;
-          } else if (Array.isArray(cr) && cr.length === 4) {
+          if (Array.isArray(cr) && cr.length === 4) {
             node.topLeftRadius = (_a = resolveNum(cr[0])) != null ? _a : 0;
             node.topRightRadius = (_b = resolveNum(cr[1])) != null ? _b : 0;
             node.bottomRightRadius = (_c = resolveNum(cr[2])) != null ? _c : 0;
             node.bottomLeftRadius = (_d = resolveNum(cr[3])) != null ? _d : 0;
+          } else {
+            const n = resolveNum(cr);
+            if (n !== null)
+              node.cornerRadius = n;
           }
         }
         if ("clipsContent" in node && pen.clip !== void 0) {
@@ -607,8 +706,8 @@
           return node;
         });
       }
-      function createFrameBase(pen, asComponent) {
-        const node = asComponent ? figma.createComponent() : figma.createFrame();
+      function createFrameBase(pen, asComponent, existing) {
+        const node = existing || (asComponent ? figma.createComponent() : figma.createFrame());
         node.fills = [];
         applyLayout(node, pen);
         if (pen.fill !== void 0)
@@ -620,13 +719,20 @@
       function createInstance(pen) {
         return __async(this, null, function* () {
           const refId = pen.ref;
-          const comp = componentMap.get(refId);
-          if (!comp) {
-            sendLog(`Missing component ref: ${refId}`, "warn");
-            return null;
+          const variantBase = variantInstanceMap.get(refId);
+          let instance;
+          if (variantBase) {
+            instance = variantBase.clone();
+            stats.instances++;
+          } else {
+            const comp = componentMap.get(refId);
+            if (!comp) {
+              sendLog(`Missing component ref: ${refId}`, "warn");
+              return null;
+            }
+            instance = comp.createInstance();
+            stats.instances++;
           }
-          const instance = comp.createInstance();
-          stats.instances++;
           const skipKeys = /* @__PURE__ */ new Set(["type", "ref", "id", "name", "descendants", "children", "x", "y", "reusable"]);
           for (const [key, val] of Object.entries(pen)) {
             if (skipKeys.has(key))
@@ -708,8 +814,9 @@
               break;
             case "cornerRadius":
               if ("cornerRadius" in node) {
-                if (typeof val === "number")
-                  node.cornerRadius = val;
+                const n = resolveNum(val);
+                if (n !== null)
+                  node.cornerRadius = n;
               }
               break;
             case "width":
@@ -782,6 +889,19 @@
               } else {
                 sendLog(`Missing component for replacement ref: ${overrides.ref}`, "warn");
               }
+            } else if (overrides.type === "frame" || overrides.type === "group") {
+              if (overrides.fill !== void 0 && "fills" in node)
+                applyFills(node, overrides.fill);
+              if (overrides.stroke !== void 0)
+                applyStroke(node, overrides.stroke);
+              if (overrides.effect !== void 0)
+                applyEffects(node, overrides.effect);
+              if (overrides.cornerRadius !== void 0 && "cornerRadius" in node) {
+                const n = resolveNum(overrides.cornerRadius);
+                if (n !== null)
+                  node.cornerRadius = n;
+              }
+              return;
             } else {
               sendLog(`Subtree replacement type "${overrides.type}" not yet supported`, "warn");
             }
@@ -847,8 +967,9 @@
               node.resize(node.width, s.fallback);
           }
           if (overrides.cornerRadius !== void 0 && "cornerRadius" in node) {
-            if (typeof overrides.cornerRadius === "number")
-              node.cornerRadius = overrides.cornerRadius;
+            const n = resolveNum(overrides.cornerRadius);
+            if (n !== null)
+              node.cornerRadius = n;
           }
           if (overrides.enabled === false)
             node.visible = false;
@@ -980,6 +1101,27 @@
                 inst.x = pen.x;
               if (pen.y !== void 0)
                 inst.y = pen.y;
+              if (pen.width !== void 0) {
+                const w = parseSizing(pen.width);
+                if (w.fallback && w.fallback > 0 && "resize" in inst) {
+                  try {
+                    inst.resize(w.fallback, inst.height);
+                  } catch (_eW) {
+                  }
+                }
+              }
+              if (pen.height !== void 0) {
+                const h = parseSizing(pen.height);
+                if (h.fallback && h.fallback > 0 && "resize" in inst) {
+                  try {
+                    inst.resize(inst.width, h.fallback);
+                  } catch (_eH) {
+                  }
+                }
+              }
+            }
+            if (pen.reusable === true && pen.id && !variantInstanceMap.has(pen.id)) {
+              variantInstanceMap.set(pen.id, inst);
             }
             return inst;
           }
@@ -988,13 +1130,15 @@
             case "frame":
             case "group": {
               const isComp = pen.reusable === true;
-              const frame = createFrameBase(pen, isComp);
+              const preRegistered = isComp && pen.id ? componentMap.get(pen.id) : void 0;
+              const frame = createFrameBase(pen, isComp, preRegistered);
               if (isComp)
                 stats.components++;
               else
                 stats.frames++;
               applyCommon(frame, pen);
-              parent.appendChild(frame);
+              if (!preRegistered)
+                parent.appendChild(frame);
               if (parentLayout) {
                 applySizing(frame, pen, parentLayout);
               } else {
@@ -1004,11 +1148,11 @@
                   frame.y = pen.y;
                 const w = parseSizing(pen.width);
                 const h = parseSizing(pen.height);
-                if (w.mode === "FIXED" && w.fallback) {
+                if ((w.mode === "FIXED" || w.mode === "FILL") && w.fallback) {
                   frame.layoutSizingHorizontal = "FIXED";
                   frame.resize(w.fallback, frame.height);
                 }
-                if (h.mode === "FIXED" && h.fallback) {
+                if ((h.mode === "FIXED" || h.mode === "FILL") && h.fallback) {
                   frame.layoutSizingVertical = "FIXED";
                   frame.resize(frame.width, h.fallback);
                 }
@@ -1430,6 +1574,66 @@
         _idCounter++;
         return "_a" + _idCounter.toString(36) + Math.random().toString(36).slice(2, 6);
       }
+      function topoSortComponents(components) {
+        const byId = {};
+        for (const c of components) {
+          if (c && c.id)
+            byId[c.id] = c;
+        }
+        function collectRefs(node, out) {
+          if (!node || typeof node !== "object")
+            return;
+          if (node.type === "ref" && node.ref)
+            out.add(node.ref);
+          if (Array.isArray(node.children)) {
+            for (const child of node.children)
+              collectRefs(child, out);
+          }
+          if (node.descendants && typeof node.descendants === "object") {
+            for (const d of Object.values(node.descendants))
+              collectRefs(d, out);
+          }
+        }
+        const deps = {};
+        for (const c of components) {
+          if (!c || !c.id)
+            continue;
+          const refs = /* @__PURE__ */ new Set();
+          if (c.type === "ref" && c.ref)
+            refs.add(c.ref);
+          if (Array.isArray(c.children)) {
+            for (const child of c.children)
+              collectRefs(child, refs);
+          }
+          if (c.descendants && typeof c.descendants === "object") {
+            for (const d of Object.values(c.descendants))
+              collectRefs(d, refs);
+          }
+          deps[c.id] = Array.from(refs).filter((r) => r !== c.id && byId[r]);
+        }
+        const sorted = [];
+        const visited = /* @__PURE__ */ new Set();
+        const visiting = /* @__PURE__ */ new Set();
+        function visit(id) {
+          if (visited.has(id) || visiting.has(id))
+            return;
+          visiting.add(id);
+          for (const dep of deps[id] || [])
+            visit(dep);
+          visiting.delete(id);
+          visited.add(id);
+          sorted.push(byId[id]);
+        }
+        for (const c of components) {
+          if (c && c.id)
+            visit(c.id);
+        }
+        for (const c of components) {
+          if (!c || !c.id)
+            sorted.push(c);
+        }
+        return sorted;
+      }
       function scanDocument(data) {
         data = detectAndAdapt(data);
         const doc = Array.isArray(data) ? { children: data } : data;
@@ -1482,7 +1686,9 @@
       }
       function importDocument(data, pageMap) {
         return __async(this, null, function* () {
+          var _a;
           componentMap.clear();
+          variantInstanceMap.clear();
           varValues.clear();
           figmaVars.clear();
           _idCounter = 0;
@@ -1536,20 +1742,37 @@
           }
           sendProgress(25, "Building components...");
           yield figma.setCurrentPageAsync(componentsPage);
-          for (let i = 0; i < components.length; i++) {
-            const pen = components[i];
-            const orig = __spreadProps(__spreadValues({}, pen), { x: i % 5 * 300, y: Math.floor(i / 5) * 250 });
+          for (const comp of components) {
+            if (comp.type === "ref")
+              continue;
+            if (comp.id && !componentMap.has(comp.id)) {
+              const shell = figma.createComponent();
+              shell.name = comp.name || comp.id;
+              componentsPage.appendChild(shell);
+              componentMap.set(comp.id, shell);
+            }
+          }
+          const sortedComponents = topoSortComponents(components);
+          const origIdx = {};
+          components.forEach((c, i) => {
+            if (c.id)
+              origIdx[c.id] = i;
+          });
+          for (let i = 0; i < sortedComponents.length; i++) {
+            const pen = sortedComponents[i];
+            const pi = pen.id != null ? (_a = origIdx[pen.id]) != null ? _a : i : i;
+            const orig = __spreadProps(__spreadValues({}, pen), { x: pi % 5 * 300, y: Math.floor(pi / 5) * 250 });
             try {
               yield buildNode(orig, figma.currentPage, false);
             } catch (_e4) {
               sendLog("Component error: " + (pen.name || pen.id) + ": " + _e4.message, "warn");
             }
             sendProgress(
-              25 + i / Math.max(components.length, 1) * 20,
+              25 + i / Math.max(sortedComponents.length, 1) * 20,
               "Building " + (pen.name || pen.id) + "..."
             );
           }
-          sendLog("Created " + components.length + " components", "ok");
+          sendLog("Created " + sortedComponents.length + " components", "ok");
           const pageGroups = {};
           for (const screen of screens) {
             const targetPage = pageMap && pageMap[screen.id] || "__current__";
